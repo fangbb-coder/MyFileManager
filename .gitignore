@@ -1,0 +1,60 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+build/
+*.spec
+
+# Virtual Environment
+venv/
+ENV/
+env/
+ENVIRONMENT/
+env.bak/
+venv.bak/
+.venv/
+
+# Logs and databases
+*.log
+*.log.*
+log.txt
+*.sqlite
+*.db
+
+# OS generated files
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# IDE / Editor directories and files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*~
+
+# Test coverage
+htmlcov/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
