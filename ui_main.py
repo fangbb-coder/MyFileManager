@@ -13,6 +13,7 @@ from datetime import datetime
 import hashlib
 import concurrent.futures
 from collections import defaultdict
+from utils import copy_file
 
 # 尝试导入 PyQt6，如果失败则尝试 Tkinter
 PYQT_AVAILABLE = False
@@ -135,6 +136,37 @@ else:
 BaseObject = object
 if PYQT_AVAILABLE and QObject is not None:
     BaseObject = QObject
+
+# 自定义 QTableWidgetItem 类，用于按字节数值排序
+if PYQT_AVAILABLE and QTableWidgetItem is not None:
+    class SizeTableWidgetItem(QTableWidgetItem):
+        def __init__(self, text, size_bytes):
+            super().__init__(text)
+            self.size_bytes = size_bytes
+        
+        def __lt__(self, other):
+            if other is None:
+                return True
+            try:
+                return self.size_bytes < other.size_bytes
+            except AttributeError:
+                return super().__lt__(other)
+    
+    class CountTableWidgetItem(QTableWidgetItem):
+        def __init__(self, text, count):
+            super().__init__(text)
+            self.count = count
+        
+        def __lt__(self, other):
+            if other is None:
+                return True
+            try:
+                return self.count < other.count
+            except AttributeError:
+                return super().__lt__(other)
+else:
+    SizeTableWidgetItem = None
+    CountTableWidgetItem = None
 
 class FileSlimmingThread(BaseThread):
     """文件夹搜身线程 - 扫描大文件"""
@@ -483,6 +515,132 @@ class DuplicateFinderThread(BaseThread):
             
         except Exception as e:
             self._emit_log(f"扫描过程中出错: {str(e)}")
+
+
+class FolderSizeThread(BaseThread):
+    """文件夹大小计算线程"""
+    
+    progress_updated = ConditionalSignal(int)
+    log_updated = ConditionalSignal(str)
+    result_ready = ConditionalSignal(list)
+    current_folder_updated = ConditionalSignal(str)
+    
+    def __init__(self, directory, sync_engine, ignore_patterns=None):
+        super().__init__()
+        self.directory = directory
+        self.sync_engine = sync_engine
+        self.ignore_patterns = ignore_patterns
+        self._stop_event = threading.Event()
+    
+    def stop(self):
+        """停止扫描"""
+        self._stop_event.set()
+        if PYQT_AVAILABLE:
+            self.wait()
+    
+    def _emit_log(self, message):
+        """发送日志信息"""
+        if PYQT_AVAILABLE:
+            self.log_updated.emit(message)
+    
+    def _emit_progress(self, progress):
+        """发送进度更新"""
+        if PYQT_AVAILABLE:
+            self.progress_updated.emit(progress)
+    
+    def _emit_current_folder(self, folder_path):
+        """发送当前处理的文件夹"""
+        if PYQT_AVAILABLE:
+            self.current_folder_updated.emit(folder_path)
+    
+    def _emit_results(self, folder_list):
+        """发送扫描结果"""
+        if PYQT_AVAILABLE:
+            self.result_ready.emit(folder_list)
+    
+    def run(self):
+        """执行文件夹大小计算"""
+        try:
+            self._emit_log(f"开始计算文件夹大小: {self.directory}")
+            
+            if not os.path.exists(self.directory):
+                self._emit_log(f"目录不存在: {self.directory}")
+                self._emit_results([])
+                return
+            
+            folder_sizes = []
+            
+            # 只获取根目录的直接子文件夹
+            try:
+                entries = os.listdir(self.directory)
+            except PermissionError:
+                self._emit_log(f"无法访问目录: {self.directory}")
+                self._emit_results([])
+                return
+            
+            subfolders = []
+            for entry in entries:
+                entry_path = os.path.join(self.directory, entry)
+                if os.path.isdir(entry_path):
+                    subfolders.append(entry_path)
+            
+            total_folders = len(subfolders)
+            processed_folders = 0
+            
+            # 计算每个子文件夹的大小
+            for folder_path in subfolders:
+                if self._stop_event.is_set():
+                    self._emit_log("计算已取消")
+                    return
+                
+                # 更新当前文件夹
+                self._emit_current_folder(folder_path)
+                
+                # 计算文件夹总大小（包括所有子文件夹和文件）
+                folder_size = 0
+                file_count = 0
+                
+                for root, dirs, files in os.walk(folder_path):
+                    if self._stop_event.is_set():
+                        break
+                    
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            folder_size += file_size
+                            file_count += 1
+                        except (FileNotFoundError, PermissionError):
+                            pass
+                
+                # 获取文件夹信息
+                folder_name = os.path.basename(folder_path)
+                folder_modified_time = os.path.getmtime(folder_path)
+                
+                # 添加到列表
+                folder_sizes.append({
+                    "name": folder_name,
+                    "path": folder_path,
+                    "size": folder_size,
+                    "file_count": file_count,
+                    "modified_time": folder_modified_time,
+                    "modified": datetime.fromtimestamp(folder_modified_time).strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                # 更新进度
+                processed_folders += 1
+                progress = (processed_folders / total_folders) * 100 if total_folders > 0 else 0
+                self._emit_progress(int(progress))
+            
+            # 按文件夹大小排序（从大到小）
+            folder_sizes.sort(key=lambda x: x["size"], reverse=True)
+            
+            if not self._stop_event.is_set():
+                self._emit_log(f"计算完成，共找到 {len(folder_sizes)} 个子文件夹")
+                self._emit_results(folder_sizes)
+        
+        except Exception as e:
+            self._emit_log(f"计算过程中发生错误: {str(e)}")
 
 
 class CopyFilesThread(BaseThread):
@@ -984,11 +1142,15 @@ class SyncApp(BaseObject):
         # 文件夹搜身页面
         self.file_slimming_tab = QWidget()
         
+        # 文件夹大小页面
+        self.folder_size_tab = QWidget()
+        
         # 添加Tab到TabWidget
         self.tab_widget.addTab(self.sync_tab, "文件夹同步")
         self.tab_widget.addTab(self.find_same_tab, "相同文件比对")
         self.tab_widget.addTab(self.find_duplicate_tab, "重复文件查找")
         self.tab_widget.addTab(self.file_slimming_tab, "文件夹搜身")
+        self.tab_widget.addTab(self.folder_size_tab, "文件夹大小")
         self.tab_widget.currentChanged.connect(self._tab_changed)
         
         # ===== 同步页面 - 文件夹选择和内容显示区域（左右结构）=====
@@ -1837,7 +1999,7 @@ class SyncApp(BaseObject):
         self.file_slimming_files_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         
         # 启用表头排序功能
-        self.file_slimming_files_table.setSortingEnabled(True)
+        self.file_slimming_files_table.setSortingEnabled(False)  # 初始禁用排序，填充数据后再启用
         
         # 设置右键菜单
         self.file_slimming_files_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -1876,6 +2038,107 @@ class SyncApp(BaseObject):
         self.file_slimming_thread = None
         self.file_slimming_files = []
         self.is_file_slimming_paused = False
+        
+        # ===== 文件夹大小页面 =====
+        self.folder_size_tab_layout = QVBoxLayout(self.folder_size_tab)
+        
+        # 文件夹选择区域
+        folder_size_folder_select_layout = QHBoxLayout()
+        self.folder_size_folder_label = QLabel("目标文件夹:")
+        self.folder_size_folder_edit = QLineEdit()
+        self.folder_size_folder_edit.setReadOnly(True)
+        self.folder_size_folder_button = QPushButton("浏览...")
+        self.folder_size_folder_button.clicked.connect(self._browse_folder_size_folder)
+        
+        folder_size_folder_select_layout.addWidget(self.folder_size_folder_label)
+        folder_size_folder_select_layout.addWidget(self.folder_size_folder_edit, 1)
+        folder_size_folder_select_layout.addWidget(self.folder_size_folder_button)
+        
+        # 扫描按钮区域
+        folder_size_scan_layout = QHBoxLayout()
+        self.start_folder_size_button = QPushButton("开始计算文件夹大小")
+        self.start_folder_size_button.clicked.connect(self._start_folder_size)
+        self.start_folder_size_button.setEnabled(False)  # 初始禁用
+        
+        self.pause_folder_size_button = QPushButton("暂停")
+        self.pause_folder_size_button.clicked.connect(self._toggle_pause_folder_size)
+        self.pause_folder_size_button.setEnabled(False)
+        
+        self.stop_folder_size_button = QPushButton("停止")
+        self.stop_folder_size_button.clicked.connect(self._stop_folder_size)
+        self.stop_folder_size_button.setEnabled(False)
+        
+        folder_size_scan_layout.addWidget(self.start_folder_size_button)
+        folder_size_scan_layout.addWidget(self.pause_folder_size_button)
+        folder_size_scan_layout.addWidget(self.stop_folder_size_button)
+        
+        # 进度条和结果显示区域（上下结构）
+        folder_size_bottom_splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # 进度条和当前文件夹显示
+        folder_size_progress_widget = QWidget()
+        folder_size_progress_layout = QVBoxLayout(folder_size_progress_widget)
+        self.folder_size_progress_bar = QProgressBar()
+        self.folder_size_progress_bar.setRange(0, 100)
+        self.folder_size_progress_bar.setValue(0)
+        self.folder_size_progress_bar.setTextVisible(True)
+        folder_size_progress_layout.addWidget(self.folder_size_progress_bar)
+        
+        # 添加当前文件夹显示标签
+        self.folder_size_current_folder_label = QLabel("当前文件夹: ")
+        folder_size_progress_layout.addWidget(self.folder_size_current_folder_label)
+        folder_size_bottom_splitter.addWidget(folder_size_progress_widget)
+        
+        # 文件夹列表显示区域
+        self.folder_size_folders_group = QGroupBox("文件夹列表（按大小排序）")
+        folder_size_folders_layout = QVBoxLayout(self.folder_size_folders_group)
+        
+        # 创建文件夹表格
+        self.folder_size_folders_table = QTableWidget()
+        self.folder_size_folders_table.setColumnCount(5)
+        self.folder_size_folders_table.setHorizontalHeaderLabels(["文件夹名称", "文件夹路径", "文件夹大小", "文件数量", "修改时间"])
+        self.folder_size_folders_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        
+        # 启用表头排序功能
+        self.folder_size_folders_table.setSortingEnabled(False)  # 初始禁用排序，填充数据后再启用
+        
+        # 设置右键菜单
+        self.folder_size_folders_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.folder_size_folders_table.customContextMenuRequested.connect(self._show_folder_size_context_menu)
+        
+        # 批量操作区域
+        folder_size_batch_ops_layout = QHBoxLayout()
+        self.copy_selected_folders_button = QPushButton("复制所选文件夹")
+        self.copy_selected_folders_button.clicked.connect(lambda: self._process_selected_folders("copy"))
+        self.copy_selected_folders_button.setEnabled(False)
+        
+        self.move_selected_folders_button = QPushButton("移动所选文件夹")
+        self.move_selected_folders_button.clicked.connect(lambda: self._process_selected_folders("move"))
+        self.move_selected_folders_button.setEnabled(False)
+        
+        self.delete_selected_folders_button = QPushButton("删除所选文件夹")
+        self.delete_selected_folders_button.clicked.connect(self._delete_selected_folders)
+        self.delete_selected_folders_button.setEnabled(False)
+        
+        folder_size_batch_ops_layout.addWidget(self.copy_selected_folders_button)
+        folder_size_batch_ops_layout.addWidget(self.move_selected_folders_button)
+        folder_size_batch_ops_layout.addWidget(self.delete_selected_folders_button)
+        
+        folder_size_folders_layout.addWidget(self.folder_size_folders_table)
+        folder_size_folders_layout.addLayout(folder_size_batch_ops_layout)
+        
+        folder_size_bottom_splitter.addWidget(self.folder_size_folders_group)
+        folder_size_bottom_splitter.setSizes([30, 300])  # 初始大小
+        
+        # 添加所有组件到文件夹大小标签布局
+        self.folder_size_tab_layout.addLayout(folder_size_folder_select_layout)
+        self.folder_size_tab_layout.addLayout(folder_size_scan_layout)
+        self.folder_size_tab_layout.addWidget(folder_size_bottom_splitter, 1)
+        
+        # 初始化文件夹大小相关变量
+        self.folder_size_thread = None
+        self.folder_size_folders = []
+        self.is_folder_size_paused = False
         
         # 添加TabWidget到主布局
         main_layout.addWidget(self.tab_widget, 1)
@@ -5753,9 +6016,7 @@ class SyncApp(BaseObject):
             self.file_slimming_files_table.setItem(row_position, 1, path_item)
             
             # 设置文件大小单元格
-            size_item = QTableWidgetItem(self._format_file_size(file_info["size"]))
-            # 用于排序
-            size_item.setData(Qt.ItemDataRole.UserRole, file_info["size"])
+            size_item = SizeTableWidgetItem(self._format_file_size(file_info["size"]), file_info["size"])
             self.file_slimming_files_table.setItem(row_position, 2, size_item)
             
             # 设置修改时间单元格
@@ -5764,7 +6025,9 @@ class SyncApp(BaseObject):
         
         # 重新启用排序并设置默认排序（按文件大小降序）
         self.file_slimming_files_table.setSortingEnabled(True)
-        self.file_slimming_files_table.sortItems(2, Qt.SortOrder.DescendingOrder)
+        
+        # 强制触发排序
+        self.file_slimming_files_table.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
         
         # 更新状态栏
         self.status_bar.showMessage(f"扫描完成: 找到 {len(files_data)} 个文件")
@@ -5907,6 +6170,330 @@ class SyncApp(BaseObject):
         
         # 显示菜单
         context_menu.exec(self.file_slimming_files_table.mapToGlobal(position))
+    
+    # ===== 文件夹大小功能方法 =====
+    
+    def _browse_folder_size_folder(self):
+        """浏览文件夹大小页面中的目标文件夹"""
+        folder = QFileDialog.getExistingDirectory(self.window, "选择文件夹")
+        if folder:
+            self.folder_size_folder_edit.setText(folder)
+            self.start_folder_size_button.setEnabled(True)
+    
+    def _start_folder_size(self):
+        """开始计算文件夹大小"""
+        folder = self.folder_size_folder_edit.text()
+        if not folder:
+            QMessageBox.warning(self.window, "警告", "请先选择文件夹")
+            return
+        
+        if not os.path.exists(folder):
+            QMessageBox.warning(self.window, "警告", "文件夹不存在")
+            return
+        
+        # 清空表格
+        self.folder_size_folders_table.setRowCount(0)
+        self.folder_size_folders = []
+        
+        # 创建并启动线程
+        self.folder_size_thread = FolderSizeThread(folder, self.sync_engine)
+        self.folder_size_thread.progress_updated.connect(self._on_folder_size_progress_updated)
+        self.folder_size_thread.current_folder_updated.connect(self._on_folder_size_current_folder_updated)
+        self.folder_size_thread.result_ready.connect(self._on_folder_size_result_ready)
+        self.folder_size_thread.log_updated.connect(self._on_folder_size_log_updated)
+        
+        self.folder_size_thread.start()
+        
+        # 更新按钮状态
+        self.start_folder_size_button.setEnabled(False)
+        self.pause_folder_size_button.setEnabled(True)
+        self.stop_folder_size_button.setEnabled(True)
+        self.is_folder_size_paused = False
+        self.pause_folder_size_button.setText("暂停")
+        
+        # 禁用操作按钮
+        self.copy_selected_folders_button.setEnabled(False)
+        self.move_selected_folders_button.setEnabled(False)
+        self.delete_selected_folders_button.setEnabled(False)
+    
+    def _toggle_pause_folder_size(self):
+        """暂停/恢复文件夹大小计算"""
+        if self.folder_size_thread is None:
+            return
+        
+        if self.is_folder_size_paused:
+            # 恢复
+            self.folder_size_thread.resume()
+            self.is_folder_size_paused = False
+            self.pause_folder_size_button.setText("暂停")
+        else:
+            # 暂停
+            self.folder_size_thread.pause()
+            self.is_folder_size_paused = True
+            self.pause_folder_size_button.setText("恢复")
+    
+    def _stop_folder_size(self):
+        """停止文件夹大小计算"""
+        if self.folder_size_thread is not None:
+            self.folder_size_thread.stop()
+            self.folder_size_thread = None
+        
+        # 重置UI状态
+        self._reset_folder_size_ui()
+    
+    def _reset_folder_size_ui(self):
+        """重置文件夹大小界面状态"""
+        self.start_folder_size_button.setEnabled(True)
+        self.pause_folder_size_button.setEnabled(False)
+        self.stop_folder_size_button.setEnabled(False)
+        self.is_folder_size_paused = False
+        self.pause_folder_size_button.setText("暂停")
+    
+    def _on_folder_size_progress_updated(self, progress):
+        """处理进度更新"""
+        self.folder_size_progress_bar.setValue(progress)
+    
+    def _on_folder_size_current_folder_updated(self, folder_path):
+        """处理当前文件夹更新"""
+        self.folder_size_current_folder_label.setText(f"当前文件夹: {folder_path}")
+    
+    def _on_folder_size_result_ready(self, folder_list):
+        """处理结果就绪"""
+        self.folder_size_folders = folder_list
+        
+        # 临时禁用排序以提高性能
+        self.folder_size_folders_table.setSortingEnabled(False)
+        
+        # 更新表格
+        self.folder_size_folders_table.setRowCount(len(folder_list))
+        for row, folder_info in enumerate(folder_list):
+            # 文件夹名称
+            name_item = QTableWidgetItem(folder_info["name"])
+            self.folder_size_folders_table.setItem(row, 0, name_item)
+            
+            # 文件夹路径
+            path_item = QTableWidgetItem(folder_info["path"])
+            path_item.setData(Qt.ItemDataRole.UserRole, folder_info["path"])
+            self.folder_size_folders_table.setItem(row, 1, path_item)
+            
+            # 文件夹大小
+            size_str = self._format_file_size(folder_info["size"])
+            size_item = SizeTableWidgetItem(size_str, folder_info["size"])
+            self.folder_size_folders_table.setItem(row, 2, size_item)
+            
+            # 文件数量
+            file_count_item = CountTableWidgetItem(str(folder_info["file_count"]), folder_info["file_count"])
+            self.folder_size_folders_table.setItem(row, 3, file_count_item)
+            
+            # 修改时间
+            modified_item = QTableWidgetItem(folder_info["modified"])
+            self.folder_size_folders_table.setItem(row, 4, modified_item)
+        
+        # 重新启用排序并设置默认排序（按文件数量降序）
+        self.folder_size_folders_table.setSortingEnabled(True)
+        
+        # 强制触发排序
+        self.folder_size_folders_table.horizontalHeader().setSortIndicator(3, Qt.SortOrder.DescendingOrder)
+        
+        # 重置UI状态
+        self._reset_folder_size_ui()
+        
+        # 启用操作按钮
+        if folder_list:
+            self.copy_selected_folders_button.setEnabled(True)
+            self.move_selected_folders_button.setEnabled(True)
+            self.delete_selected_folders_button.setEnabled(True)
+    
+    def _on_folder_size_log_updated(self, message):
+        """处理日志更新"""
+        self._log_message(message, source="folder_size")
+    
+    def _show_folder_size_context_menu(self, position):
+        """显示文件夹表格的右键菜单"""
+        # 如果没有选中任何项目，则不显示菜单
+        if not self.folder_size_folders_table.selectedItems():
+            return
+        
+        # 创建右键菜单
+        context_menu = QMenu()
+        
+        # 添加复制操作
+        copy_action = QAction("复制选中文件夹", self.window)
+        copy_action.triggered.connect(lambda: self._process_selected_folders("copy"))
+        context_menu.addAction(copy_action)
+        
+        # 添加移动操作
+        move_action = QAction("移动选中文件夹", self.window)
+        move_action.triggered.connect(lambda: self._process_selected_folders("move"))
+        context_menu.addAction(move_action)
+        
+        # 添加删除操作
+        delete_action = QAction("删除选中文件夹", self.window)
+        delete_action.triggered.connect(self._delete_selected_folders)
+        context_menu.addAction(delete_action)
+        
+        # 显示菜单
+        context_menu.exec(self.folder_size_folders_table.mapToGlobal(position))
+    
+    def _process_selected_folders(self, operation):
+        """处理选中的文件夹（复制/移动）"""
+        selected_items = self.folder_size_folders_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self.window, "警告", "请先选择文件夹")
+            return
+        
+        # 获取选中的文件夹路径
+        selected_rows = set(item.row() for item in selected_items)
+        selected_folders = []
+        for row in selected_rows:
+            path_item = self.folder_size_folders_table.item(row, 1)
+            if path_item:
+                folder_path = path_item.data(Qt.ItemDataRole.UserRole)
+                selected_folders.append(folder_path)
+        
+        if not selected_folders:
+            return
+        
+        # 选择目标目录
+        if operation == "copy":
+            target_dir = QFileDialog.getExistingDirectory(self.window, "选择目标文件夹")
+            if not target_dir:
+                return
+            
+            # 复制文件夹
+            success_count = 0
+            failed_count = 0
+            for folder_path in selected_folders:
+                folder_name = os.path.basename(folder_path)
+                dest_path = os.path.join(target_dir, folder_name)
+                try:
+                    self._copy_directory(folder_path, dest_path)
+                    success_count += 1
+                    self._log_message(f"复制文件夹成功: {folder_path} -> {dest_path}", source="folder_size")
+                except Exception as e:
+                    failed_count += 1
+                    self._log_message(f"复制文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+            
+            QMessageBox.information(self.window, "完成", f"复制完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+        
+        elif operation == "move":
+            target_dir = QFileDialog.getExistingDirectory(self.window, "选择目标文件夹")
+            if not target_dir:
+                return
+            
+            # 移动文件夹
+            success_count = 0
+            failed_count = 0
+            for folder_path in selected_folders:
+                folder_name = os.path.basename(folder_path)
+                dest_path = os.path.join(target_dir, folder_name)
+                copy_success = False
+                try:
+                    self._copy_directory(folder_path, dest_path)
+                    copy_success = True
+                    # 删除原文件夹
+                    self._delete_directory(folder_path)
+                    success_count += 1
+                    self._log_message(f"移动文件夹成功: {folder_path} -> {dest_path}", source="folder_size")
+                except Exception as e:
+                    failed_count += 1
+                    self._log_message(f"移动文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+                    # 如果复制失败，尝试删除可能已部分复制的目标文件夹
+                    if not copy_success and os.path.exists(dest_path):
+                        try:
+                            self._delete_directory(dest_path)
+                            self._log_message(f"已清理部分复制的内容: {dest_path}", source="folder_size")
+                        except Exception as cleanup_error:
+                            self._log_message(f"清理部分复制内容失败: {dest_path}, 错误: {str(cleanup_error)}", source="folder_size")
+            
+            QMessageBox.information(self.window, "完成", f"移动完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+            
+            # 刷新列表
+            self._start_folder_size()
+    
+    def _delete_selected_folders(self):
+        """删除选中的文件夹"""
+        selected_items = self.folder_size_folders_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self.window, "警告", "请先选择文件夹")
+            return
+        
+        # 获取选中的文件夹路径
+        selected_rows = set(item.row() for item in selected_items)
+        selected_folders = []
+        for row in selected_rows:
+            path_item = self.folder_size_folders_table.item(row, 1)
+            if path_item:
+                folder_path = path_item.data(Qt.ItemDataRole.UserRole)
+                selected_folders.append(folder_path)
+        
+        if not selected_folders:
+            return
+        
+        # 确认删除
+        reply = QMessageBox.question(
+            self.window,
+            "确认删除",
+            f"确定要删除选中的 {len(selected_folders)} 个文件夹吗？\n此操作不可恢复！",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            success_count = 0
+            failed_count = 0
+            for folder_path in selected_folders:
+                try:
+                    self._delete_directory(folder_path)
+                    success_count += 1
+                    self._log_message(f"删除文件夹成功: {folder_path}", source="folder_size")
+                except Exception as e:
+                    failed_count += 1
+                    self._log_message(f"删除文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+            
+            QMessageBox.information(self.window, "完成", f"删除完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+            
+            # 刷新列表
+            self._start_folder_size()
+    
+    def _copy_directory(self, src, dst):
+        """递归复制目录"""
+        try:
+            if not os.path.exists(dst):
+                os.makedirs(dst)
+            for item in os.listdir(src):
+                s = os.path.join(src, item)
+                d = os.path.join(dst, item)
+                if os.path.isdir(s):
+                    self._copy_directory(s, d)
+                else:
+                    try:
+                        copy_file(s, d)
+                    except Exception as e:
+                        self._log_message(f"无法复制文件 {s} 到 {d}: {str(e)}", source="folder_size")
+        except Exception as e:
+            self._log_message(f"复制目录时出错 {src}: {str(e)}", source="folder_size")
+            raise
+    
+    def _delete_directory(self, path):
+        """递归删除目录"""
+        try:
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                if os.path.isdir(item_path):
+                    self._delete_directory(item_path)
+                else:
+                    try:
+                        os.unlink(item_path)
+                    except (PermissionError, FileNotFoundError) as e:
+                        self._log_message(f"无法删除文件 {item_path}: {str(e)}", source="folder_size")
+            try:
+                os.rmdir(path)
+            except (PermissionError, OSError) as e:
+                self._log_message(f"无法删除目录 {path}: {str(e)}", source="folder_size")
+                raise
+        except (PermissionError, FileNotFoundError, OSError) as e:
+            self._log_message(f"删除目录时出错 {path}: {str(e)}", source="folder_size")
+            raise
     
     def run(self):
         """运行应用"""

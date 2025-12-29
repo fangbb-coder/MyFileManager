@@ -672,3 +672,93 @@ class SyncEngine:
         else:
             self._log_message(f"不支持的同步模式: {sync_mode}", "error")
             return False
+    
+    def calculate_folder_sizes(self, root_dir, ignore_patterns=None):
+        """
+        计算指定目录下所有文件夹的大小
+        
+        Args:
+            root_dir: 根目录路径
+            ignore_patterns: 忽略模式列表
+        
+        Returns:
+            list: 文件夹信息列表，每个元素包含文件夹名称、路径、大小、修改时间等信息
+        """
+        try:
+            self._stop_requested = False
+            self._pause_requested = False
+            self._current_progress = 0
+            self._processed_files = 0
+            self._sync_log = []
+            
+            self._log_message(f"开始计算文件夹大小: {root_dir}")
+            
+            if not os.path.exists(root_dir):
+                self._log_message(f"目录不存在: {root_dir}", "error")
+                return []
+            
+            # 解析忽略模式
+            if isinstance(ignore_patterns, str):
+                ignore_patterns = parse_ignore_patterns(ignore_patterns)
+            
+            folder_sizes = []
+            
+            # 遍历所有子文件夹
+            for dirpath, dirnames, filenames in os.walk(root_dir):
+                if self._stop_requested:
+                    self._log_message("操作已停止")
+                    return []
+                
+                # 检查是否暂停
+                while self._pause_requested and not self._stop_requested:
+                    import time
+                    time.sleep(0.5)
+                
+                if self._stop_requested:
+                    return []
+                
+                # 过滤掉应该忽略的目录
+                dirnames[:] = [d for d in dirnames 
+                              if not should_ignore_file(os.path.join(dirpath, d), ignore_patterns)]
+                
+                # 计算当前文件夹的大小
+                folder_size = 0
+                file_count = 0
+                
+                for filename in filenames:
+                    if should_ignore_file(os.path.join(dirpath, filename), ignore_patterns):
+                        continue
+                    
+                    file_path = os.path.join(dirpath, filename)
+                    try:
+                        file_size = os.path.getsize(file_path)
+                        folder_size += file_size
+                        file_count += 1
+                    except (FileNotFoundError, PermissionError):
+                        pass
+                
+                # 获取文件夹信息
+                folder_name = os.path.basename(dirpath)
+                folder_modified_time = os.path.getmtime(dirpath)
+                
+                # 添加到结果列表
+                folder_sizes.append({
+                    "name": folder_name,
+                    "path": dirpath,
+                    "size": folder_size,
+                    "file_count": file_count,
+                    "modified_time": folder_modified_time,
+                    "modified": datetime.fromtimestamp(folder_modified_time).strftime('%Y-%m-%d %H:%M:%S')
+                })
+                
+                self._processed_files += 1
+            
+            # 按文件夹大小排序（从大到小）
+            folder_sizes.sort(key=lambda x: x["size"], reverse=True)
+            
+            self._log_message(f"计算完成，共找到 {len(folder_sizes)} 个文件夹")
+            return folder_sizes
+            
+        except Exception as e:
+            self._log_message(f"计算文件夹大小时发生错误: {str(e)}", "error")
+            return []
