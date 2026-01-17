@@ -7,7 +7,9 @@
 
 import os
 import logging
+import time
 from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple, Any
 from utils import (
     get_file_info, copy_file, delete_file, delete_directory,
     should_ignore_file, format_timestamp, parse_ignore_patterns,
@@ -21,53 +23,61 @@ class SyncEngine:
     实现单向和双向同步功能
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self._stop_requested = False
         self._pause_requested = False
         self._current_progress = 0
         self._total_files = 0
         self._processed_files = 0
-        self._sync_log = []
-        self._current_file = ""  # 添加缺失的属性初始化
-        
-    def stop(self):
+        self._sync_log: List[str] = []
+        self._current_file = ""
+        self._log_file_handle: Optional[Any] = None
+        self._log_file_path = os.path.join(os.getcwd(), "log.txt")
+    
+    def stop(self) -> None:
         """停止同步任务"""
         self._stop_requested = True
         self._log_message("同步任务已停止")
+        if self._log_file_handle is not None:
+            try:
+                self._log_file_handle.close()
+                self._log_file_handle = None
+            except Exception as e:
+                logging.error(f"关闭日志文件失败: {str(e)}")
     
-    def pause(self):
+    def pause(self) -> None:
         """暂停同步任务"""
         self._pause_requested = True
         self._log_message("同步任务已暂停")
     
-    def resume(self):
+    def resume(self) -> None:
         """恢复同步任务"""
         self._pause_requested = False
         self._log_message("同步任务已恢复")
     
-    def is_stopped(self):
+    def is_stopped(self) -> bool:
         """检查是否已停止"""
         return self._stop_requested
     
-    def is_paused(self):
+    def is_paused(self) -> bool:
         """检查是否已暂停"""
         return self._pause_requested
     
-    def get_progress(self):
+    def get_progress(self) -> int:
         """获取同步进度"""
         if self._total_files == 0:
             return 0
         return min(100, int((self._processed_files / self._total_files) * 100))
     
-    def get_log(self):
+    def get_log(self) -> List[str]:
         """获取同步日志"""
         return self._sync_log
     
-    def clear_log(self):
+    def clear_log(self) -> None:
         """清空同步日志"""
         self._sync_log = []
     
-    def _log_message(self, message, log_type="info"):
+    def _log_message(self, message: Any, log_type: str = "info") -> None:
         """
         记录日志信息
         
@@ -76,13 +86,11 @@ class SyncEngine:
             log_type: 日志类型 (info, warning, error)
         """
         try:
-            # 安全处理消息，确保不包含无法编码的字符
             safe_message = str(message).encode('utf-8', errors='ignore').decode('utf-8')
             timestamp = format_timestamp()
             log_entry = f"[{timestamp}] {safe_message}"
             self._sync_log.append(log_entry)
             
-            # 同时记录到系统日志
             if log_type == "info":
                 logging.info(safe_message)
             elif log_type == "warning":
@@ -90,36 +98,34 @@ class SyncEngine:
             elif log_type == "error":
                 logging.error(safe_message)
             
-            # 统一写入到文件日志（优化：减少文件打开关闭次数）
             try:
-                with open('log.txt', 'a', encoding='utf-8', errors='ignore') as f:
-                    f.write(f"{log_entry}\n")
+                if self._log_file_handle is None:
+                    self._log_file_handle = open(self._log_file_path, 'a', encoding='utf-8', errors='ignore')
+                self._log_file_handle.write(f"{log_entry}\n")
+                self._log_file_handle.flush()
             except Exception as e:
-                # 如果文件写入失败，只记录到内存，避免崩溃
                 logging.error(f"写入日志文件失败: {str(e)}")
         except Exception as e:
-            # 如果日志记录过程中发生任何异常，确保程序不会崩溃
             logging.error(f"日志记录失败: {str(e)}")
     
-    def _check_pause_stop(self):
+    def _check_pause_stop(self) -> bool:
         """检查是否需要暂停或停止"""
         if self._stop_requested:
             return False
         
         while self._pause_requested and not self._stop_requested:
-            # 这里可以添加适当的延迟，避免CPU占用过高
-            import time
             time.sleep(0.5)
         
         return not self._stop_requested
     
-    def _scan_files(self, root_dir, ignore_patterns=None):
+    def _scan_files(self, root_dir: str, ignore_patterns: Optional[List[str]] = None, compute_hash: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         扫描目录中的所有文件
         
         Args:
             root_dir: 根目录路径
             ignore_patterns: 忽略模式列表
+            compute_hash: 是否计算文件哈希值
         
         Returns:
             dict: 文件路径映射到文件信息的字典
@@ -136,7 +142,7 @@ class SyncEngine:
                 if not should_ignore_file(file_path, ignore_patterns):
                     # 计算相对路径作为键
                     rel_path = os.path.relpath(file_path, root_dir)
-                    file_info = get_file_info(file_path)
+                    file_info = get_file_info(file_path, compute_hash=compute_hash)
                     if file_info:  # 添加检查，确保文件信息有效
                         files_info[rel_path] = file_info
             
@@ -150,7 +156,7 @@ class SyncEngine:
         
         return files_info
     
-    def _scan_directories(self, root_dir, ignore_patterns=None):
+    def _scan_directories(self, root_dir: str, ignore_patterns: Optional[List[str]] = None) -> Set[str]:
         """
         扫描目录中的所有目录（包括空目录）
         
@@ -161,7 +167,7 @@ class SyncEngine:
         Returns:
             set: 目录相对路径的集合
         """
-        dirs_set = set()
+        dirs_set: Set[str] = set()
         
         if not os.path.exists(root_dir):
             return dirs_set
@@ -186,7 +192,7 @@ class SyncEngine:
         
         return dirs_set
     
-    def sync_one_way(self, source_dir, dest_dir, sync_delete=False, ignore_patterns=None):
+    def sync_one_way(self, source_dir: str, dest_dir: str, sync_delete: bool = False, ignore_patterns: Optional[List[str]] = None) -> bool:
         """
         单向同步
         
@@ -305,7 +311,7 @@ class SyncEngine:
             self._log_message(f"同步过程中发生错误: {str(e)}", "error")
             return False
     
-    def sync_two_way(self, dir_a, dir_b, sync_delete=False, ignore_patterns=None):
+    def sync_two_way(self, dir_a: str, dir_b: str, sync_delete: bool = False, ignore_patterns: Optional[List[str]] = None) -> bool:
         """
         双向同步（优化版本）
         
@@ -447,7 +453,7 @@ class SyncEngine:
             self._log_message(f"双向同步过程中发生错误: {str(e)}", "error")
             return False
     
-    def find_same_files(self, dir_a, dir_b, ignore_patterns=None, show_duplicates=False):
+    def find_same_files(self, dir_a: str, dir_b: str, ignore_patterns: Optional[List[str]] = None, show_duplicates: bool = False) -> List[Tuple[str, str]]:
         """
         查找两个目录中的相同文件
         
@@ -483,7 +489,7 @@ class SyncEngine:
                 self._log_message("操作已暂停或停止")
                 return []
             
-            files_a = self._scan_files(dir_a, ignore_patterns)
+            files_a = self._scan_files(dir_a, ignore_patterns, compute_hash=True)
             if self._stop_requested:
                 self._log_message("操作已停止")
                 return []
@@ -495,7 +501,7 @@ class SyncEngine:
                 self._log_message("操作已暂停或停止")
                 return []
             
-            files_b = self._scan_files(dir_b, ignore_patterns)
+            files_b = self._scan_files(dir_b, ignore_patterns, compute_hash=True)
             if self._stop_requested:
                 self._log_message("操作已停止")
                 return []
@@ -509,11 +515,11 @@ class SyncEngine:
             # 查找相同文件
             self._log_message(f"[步骤2/3] 开始构建文件映射，准备比对...")
             
-            # 按文件大小、哈希和文件名分组
+            # 按文件大小和哈希分组（不包含文件名，以识别不同文件名的相同内容文件）
             file_map_a = {}
             file_map_b = {}
             
-            # 构建文件A的映射（包含文件名）
+            # 构建文件A的映射
             self._log_message(f"[步骤2/3] 正在构建目录A文件映射... (共{len(files_a)}个文件)")
             a_count = 0
             for rel_path, info in files_a.items():
@@ -521,10 +527,8 @@ class SyncEngine:
                     self._log_message("操作已暂停或停止")
                     return []
                 
-                # 获取文件名（不含路径）
-                filename = os.path.basename(rel_path)
-                # 使用文件名、大小和哈希作为key，确保基于文件名及文件校验进行比对
-                key = (filename, info['size'], info['hash'])
+                # 使用文件大小和哈希作为key，识别相同内容但不同文件名的文件
+                key = (info['size'], info['hash'])
                 if key not in file_map_a:
                     file_map_a[key] = []
                 file_map_a[key].append(info['path'])
@@ -539,7 +543,7 @@ class SyncEngine:
             
             self._log_message(f"[步骤2/3] 目录A文件映射构建完成！共 {len(file_map_a)} 个唯一文件组")
             
-            # 构建文件B的映射（包含文件名）
+            # 构建文件B的映射
             self._log_message(f"[步骤2/3] 正在构建目录B文件映射... (共{len(files_b)}个文件)")
             b_count = 0
             for rel_path, info in files_b.items():
@@ -547,10 +551,8 @@ class SyncEngine:
                     self._log_message("操作已暂停或停止")
                     return []
                 
-                # 获取文件名（不含路径）
-                filename = os.path.basename(rel_path)
-                # 使用文件名、大小和哈希作为key，确保基于文件名及文件校验进行比对
-                key = (filename, info['size'], info['hash'])
+                # 使用文件大小和哈希作为key，识别相同内容但不同文件名的文件
+                key = (info['size'], info['hash'])
                 if key not in file_map_b:
                     file_map_b[key] = []
                 file_map_b[key].append(info['path'])
@@ -581,12 +583,11 @@ class SyncEngine:
                 processed_keys += 1
                 
                 if key in file_map_b:
-                    filename = key[0]
-                    file_size = key[1]
-                    file_hash = key[2]
+                    file_size = key[0]
+                    file_hash = key[1]
                     
                     # 记录找到匹配的文件组
-                    self._log_message(f"[匹配] 找到相同文件组: 文件名='{filename}', 大小={file_size}字节, 哈希={file_hash[:8]}...")
+                    self._log_message(f"[匹配] 找到相同文件组: 大小={file_size}字节, 哈希={file_hash[:8]}...")
                     
                     for path_a in file_map_a[key]:
                         for path_b in file_map_b[key]:
@@ -649,7 +650,7 @@ class SyncEngine:
             self._log_message("=======================================\n")
             return []
     
-    def run_sync(self, dir_a, dir_b, sync_mode="a_to_b", sync_delete=False, ignore_patterns=None):
+    def run_sync(self, dir_a: str, dir_b: str, sync_mode: str = "a_to_b", sync_delete: bool = False, ignore_patterns: Optional[List[str]] = None) -> bool:
         """
         运行同步任务
         

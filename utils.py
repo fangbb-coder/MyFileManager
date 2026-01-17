@@ -10,9 +10,10 @@ import shutil
 import hashlib
 import logging
 from datetime import datetime
+from typing import Optional, List
 
 
-def get_file_hash(file_path, block_size=65536):
+def get_file_hash(file_path: str, block_size: int = 65536) -> Optional[str]:
     """
     计算文件的MD5哈希值，用于文件内容比较
     
@@ -36,23 +37,24 @@ def get_file_hash(file_path, block_size=65536):
         return None
 
 
-def get_file_info(file_path):
+def get_file_info(file_path: str, compute_hash: bool = False) -> Optional[dict]:
     """
-    获取文件的基本信息，包括文件哈希值
+    获取文件的基本信息
     
     Args:
         file_path: 文件路径
+        compute_hash: 是否计算文件哈希值（默认为False，提高性能）
     
     Returns:
-        dict: 包含文件名、大小、修改时间、哈希值和路径的字典
+        dict: 包含文件名、大小、修改时间、哈希值（如果compute_hash=True）和路径的字典
     """
     try:
         stat_info = os.stat(file_path)
-        # 计算文件哈希值
-        hash_value = get_file_hash(file_path)
-        if hash_value is None:
-            # 如果无法计算哈希值，返回None表示失败
-            return None
+        hash_value = None
+        if compute_hash:
+            hash_value = get_file_hash(file_path)
+            if hash_value is None:
+                return None
         
         return {
             'name': os.path.basename(file_path),
@@ -66,7 +68,7 @@ def get_file_info(file_path):
         return None
 
 
-def copy_file(source_path, dest_path, overwrite=True):
+def copy_file(source_path: str, dest_path: str, overwrite: bool = True) -> bool:
     """
     复制文件，支持覆盖选项
     
@@ -106,7 +108,7 @@ def copy_file(source_path, dest_path, overwrite=True):
         return False
 
 
-def delete_file(file_path):
+def delete_file(file_path: str) -> bool:
     """
     删除文件
     
@@ -125,7 +127,7 @@ def delete_file(file_path):
         return False
 
 
-def delete_directory(dir_path):
+def delete_directory(dir_path: str) -> bool:
     """
     删除目录
     
@@ -144,7 +146,7 @@ def delete_directory(dir_path):
         return False
 
 
-def should_ignore_file(file_path, ignore_patterns):
+def should_ignore_file(file_path: str, ignore_patterns: Optional[List[str]]) -> bool:
     """
     检查文件是否应该被忽略
     
@@ -168,7 +170,7 @@ def should_ignore_file(file_path, ignore_patterns):
     return False
 
 
-def format_timestamp(timestamp=None):
+def format_timestamp(timestamp: Optional[float] = None) -> str:
     """
     格式化时间戳
     
@@ -186,7 +188,7 @@ def format_timestamp(timestamp=None):
     return timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
 
-def setup_logging(log_file="log.txt"):
+def setup_logging(log_file: str = "log.txt") -> None:
     """
     设置日志记录
     
@@ -220,7 +222,7 @@ def setup_logging(log_file="log.txt"):
     logger.addHandler(console_handler)
 
 
-def parse_ignore_patterns(patterns_str):
+def parse_ignore_patterns(patterns_str: str) -> List[str]:
     """
     解析忽略模式字符串
     
@@ -239,7 +241,7 @@ def parse_ignore_patterns(patterns_str):
     return [p for p in patterns if p]
 
 
-def compare_files(file1, file2):
+def compare_files(file1: str, file2: str) -> bool:
     """
     比较两个文件是否相同
     首先比较文件大小，不同则直接返回False
@@ -253,22 +255,18 @@ def compare_files(file1, file2):
         bool: 文件是否相同
     """
     try:
-        # 获取文件信息
-        info1 = get_file_info(file1)
-        info2 = get_file_info(file2)
+        stat1 = os.stat(file1)
+        stat2 = os.stat(file2)
         
-        if not info1 or not info2:
+        if stat1.st_size != stat2.st_size:
             return False
         
-        # 首先比较大小（优化：不比较修改时间，因为可能会误判）
-        if info1['size'] != info2['size']:
-            return False
-        
-        # 如果大小相同，计算哈希值进行确认
         hash1 = get_file_hash(file1)
-        hash2 = get_file_hash(file2)
+        if hash1 is None:
+            return False
         
-        if hash1 is None or hash2 is None:
+        hash2 = get_file_hash(file2)
+        if hash2 is None:
             return False
         
         return hash1 == hash2

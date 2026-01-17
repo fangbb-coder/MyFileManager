@@ -13,7 +13,15 @@ from datetime import datetime
 import hashlib
 import concurrent.futures
 from collections import defaultdict
-from utils import copy_file
+import subprocess
+
+from ui_components import UIStyles, UIUtils, FileTableWidgetItem
+from ui_sync import SyncUI
+from ui_find_same import FindSameUI
+from ui_find_duplicate import DuplicateFinderUI
+from ui_file_slimming import FileSlimmingUI
+from ui_threads import FileSlimmingThread, DuplicateFinderThread, CopyFilesThread, SyncThread
+from config_manager import ConfigManager
 
 # 尝试导入 PyQt6，如果失败则尝试 Tkinter
 PYQT_AVAILABLE = False
@@ -136,37 +144,6 @@ else:
 BaseObject = object
 if PYQT_AVAILABLE and QObject is not None:
     BaseObject = QObject
-
-# 自定义 QTableWidgetItem 类，用于按字节数值排序
-if PYQT_AVAILABLE and QTableWidgetItem is not None:
-    class SizeTableWidgetItem(QTableWidgetItem):
-        def __init__(self, text, size_bytes):
-            super().__init__(text)
-            self.size_bytes = size_bytes
-        
-        def __lt__(self, other):
-            if other is None:
-                return True
-            try:
-                return self.size_bytes < other.size_bytes
-            except AttributeError:
-                return super().__lt__(other)
-    
-    class CountTableWidgetItem(QTableWidgetItem):
-        def __init__(self, text, count):
-            super().__init__(text)
-            self.count = count
-        
-        def __lt__(self, other):
-            if other is None:
-                return True
-            try:
-                return self.count < other.count
-            except AttributeError:
-                return super().__lt__(other)
-else:
-    SizeTableWidgetItem = None
-    CountTableWidgetItem = None
 
 class FileSlimmingThread(BaseThread):
     """文件夹搜身线程 - 扫描大文件"""
@@ -1035,7 +1012,6 @@ class SyncThread(BaseThread):
             print(f"[DEBUG] 日志更新块错误: {e}")
             pass  # 忽略日志更新错误
 
-
 class SyncApp(BaseObject):
     """
     文件同步应用类
@@ -1212,12 +1188,6 @@ class SyncApp(BaseObject):
             self.sync_source_model.setReadOnly(True)
             self.sync_source_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDot)
             
-            # 设置中文列名（必须在setRootPath之后）
-            # self.sync_source_model.setHeaderData(0, Qt.Orientation.Horizontal, "名称")
-            # self.sync_source_model.setHeaderData(1, Qt.Orientation.Horizontal, "大小")
-            # self.sync_source_model.setHeaderData(2, Qt.Orientation.Horizontal, "类型")
-            # self.sync_source_model.setHeaderData(3, Qt.Orientation.Horizontal, "修改日期")
-            
             self.sync_source_tree.setModel(self.sync_source_model)
             self.sync_source_tree.setRootIsDecorated(True)
             self.sync_source_tree.setSortingEnabled(True)
@@ -1244,17 +1214,8 @@ class SyncApp(BaseObject):
                     proxy_model.setSourceModel(self.sync_source_model)
                     self.sync_source_tree.setModel(proxy_model)
                 except ImportError:
-                    # 如果导入失败，直接使用原模型
                     pass
             
-            # 直接设置表头中文显示
-            # header = self.sync_source_tree.header()
-            # self.sync_source_tree.model().setHeaderData(0, Qt.Orientation.Horizontal, "名称")
-            # self.sync_source_tree.model().setHeaderData(1, Qt.Orientation.Horizontal, "大小")
-            # self.sync_source_tree.model().setHeaderData(2, Qt.Orientation.Horizontal, "类型")
-            # self.sync_source_tree.model().setHeaderData(3, Qt.Orientation.Horizontal, "修改日期")
-            
-            # 调整列宽和显示的列
             self.sync_source_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             self.sync_source_tree.setColumnWidth(1, 100)
             self.sync_source_tree.setColumnWidth(2, 100)
@@ -1334,12 +1295,6 @@ class SyncApp(BaseObject):
             self.sync_target_model.setReadOnly(True)
             self.sync_target_model.setFilter(QDir.Filter.AllEntries | QDir.Filter.NoDot)
             
-            # 设置中文列名（必须在setRootPath之后）
-            # self.sync_target_model.setHeaderData(0, Qt.Orientation.Horizontal, "名称")
-            # self.sync_target_model.setHeaderData(1, Qt.Orientation.Horizontal, "大小")
-            # self.sync_target_model.setHeaderData(2, Qt.Orientation.Horizontal, "类型")
-            # self.sync_target_model.setHeaderData(3, Qt.Orientation.Horizontal, "修改日期")
-            
             self.sync_target_tree.setModel(self.sync_target_model)
             self.sync_target_tree.setRootIsDecorated(True)
             self.sync_target_tree.setSortingEnabled(True)
@@ -1366,17 +1321,8 @@ class SyncApp(BaseObject):
                     proxy_model.setSourceModel(self.sync_target_model)
                     self.sync_target_tree.setModel(proxy_model)
                 except ImportError:
-                    # 如果导入失败，直接使用原模型
                     pass
             
-            # 直接设置表头中文显示
-            # header = self.sync_target_tree.header()
-            # self.sync_target_tree.model().setHeaderData(0, Qt.Orientation.Horizontal, "名称")
-            # self.sync_target_tree.model().setHeaderData(1, Qt.Orientation.Horizontal, "大小")
-            # self.sync_target_tree.model().setHeaderData(2, Qt.Orientation.Horizontal, "类型")
-            # self.sync_target_tree.model().setHeaderData(3, Qt.Orientation.Horizontal, "修改日期")
-            
-            # 调整列宽和显示的列
             self.sync_target_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
             self.sync_target_tree.setColumnWidth(1, 100)
             self.sync_target_tree.setColumnWidth(2, 100)
@@ -1802,6 +1748,8 @@ class SyncApp(BaseObject):
         self.find_same_files_table.setColumnCount(4)
         self.find_same_files_table.setHorizontalHeaderLabels(["文件夹A文件", "文件夹B文件", "操作", "批量操作"])
         self.find_same_files_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.find_same_files_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.find_same_files_table.customContextMenuRequested.connect(self._show_find_same_context_menu)
         
         # 批量操作区域
         batch_ops_layout = QHBoxLayout()
@@ -2525,37 +2473,34 @@ class SyncApp(BaseObject):
         
         # 停止之前可能存在的线程
         if hasattr(self, 'sync_thread') and self.sync_thread:
-            print("[DEBUG] 停止之前可能存在的线程")
+            
             try:
                 self.sync_thread.stop()
-                print("[DEBUG] 已调用线程的stop方法")
+                
                 if PYQT_AVAILABLE and hasattr(self.sync_thread, 'wait'):
                     # 增加超时控制
-                    print("[DEBUG] 等待线程结束，最多5秒")
+                    
                     if not self.sync_thread.wait(5000):  # 5秒超时
                         self._log_message("警告：线程未在预期时间内停止", source="find_same")
-                        print("[DEBUG] 警告：线程未在预期时间内停止")
                     else:
-                        print("[DEBUG] 线程已成功终止")
+                        self._log_message("线程已成功终止", source="find_same")
                 else:
-                    print("[DEBUG] 非PyQt模式或线程没有wait方法，等待线程自然结束")
+                    self._log_message("非PyQt模式或线程没有wait方法，等待线程自然结束", source="find_same")
+                    
             except Exception as e:
                 error_msg = f"停止线程时出错: {str(e)}"
                 self._log_message(error_msg, source="find_same")
-                print(f"[DEBUG] {error_msg}")
+                
             finally:
                 # 即使出错，也要清除引用
                 self.sync_thread = None
-                print("[DEBUG] 已清除线程引用")
+                
         
         # 确保同步引擎存在
         if not hasattr(self, 'sync_engine') or not self.sync_engine:
-            print("[DEBUG] 同步引擎不存在，正在创建...")
+            
             # 重新初始化同步引擎
             self.sync_engine = SyncEngine()
-            print("[DEBUG] 同步引擎创建成功")
-        else:
-            print("[DEBUG] 同步引擎已存在")
         
         # 创建并启动任务线程，传递show_duplicates=False参数
         self.sync_thread = SyncThread(
@@ -2803,7 +2748,7 @@ class SyncApp(BaseObject):
     
     def _find_same_files(self):
         """查找相同文件"""
-        print("[DEBUG] _find_same_files方法开始执行")
+        
         
         # 确保在方法开始时重置所有状态
         self.running = False
@@ -2814,101 +2759,96 @@ class SyncApp(BaseObject):
                 dir_a = self.find_same_folder_a_edit.text().strip()
                 dir_b = self.find_same_folder_b_edit.text().strip()
                 ignore_patterns = self.find_same_ignore_edit.text().strip()
-                print(f"[DEBUG] PyQt模式: 源文件夹路径A={dir_a}, 文件夹路径B={dir_b}")
+                
             else:
                 dir_a = self.folder_a_var.get().strip()
                 dir_b = self.folder_b_var.get().strip()
                 ignore_patterns = self.ignore_var.get().strip()
-                print(f"[DEBUG] Tkinter模式: 源文件夹路径A={dir_a}, 文件夹路径B={dir_b}")
+                
             
             # 验证文件夹路径
             if not dir_a or not os.path.isdir(dir_a):
                 self._show_error("错误", "请选择有效的源文件夹 A")
-                print("[DEBUG] 源文件夹A无效")
+                
                 return
             
             if not dir_b or not os.path.isdir(dir_b):
                 self._show_error("错误", "请选择有效的目标文件夹 B")
-                print("[DEBUG] 源文件夹B无效")
+                
                 return
             
-            print("[DEBUG] 文件夹路径验证通过")
+            
             
             # 清空相同文件列表
             self._clear_same_files()
-            print("[DEBUG] 已清空相同文件列表")
+            
             
             # 清空并初始化相同文件比对日志
             self._clear_find_same_log()
             self._log_message("准备查找相同文件...", source="find_same")
-            print("[DEBUG] 已清空日志并初始化")
+            
             
             # 设置运行状态
             self.running = True
-            print("[DEBUG] 运行状态设置为True")
+            
             
             # 禁用相关按钮
             self._set_buttons_state(False)
-            print("[DEBUG] 相关按钮已禁用")
+            
             
             # 停止之前可能存在的线程
             if hasattr(self, 'sync_thread') and self.sync_thread:
-                print("[DEBUG] 停止之前可能存在的线程")
+                
                 try:
                     self.sync_thread.stop()
-                    print("[DEBUG] 已调用线程的stop方法")
                     
                     # 等待线程完全停止
                     if PYQT_AVAILABLE and hasattr(self.sync_thread, 'wait'):
-                        # 增加超时控制
-                        print("[DEBUG] 等待线程结束，最多5秒")
                         if not self.sync_thread.wait(5000):  # 5秒超时
                             self._log_message("警告：线程未在预期时间内停止", source="find_same")
-                            print("[DEBUG] 警告：线程未在预期时间内停止")
                         else:
-                            print("[DEBUG] 线程已成功终止")
+                            self._log_message("线程已成功终止", source="find_same")
                     else:
-                        print("[DEBUG] 非PyQt模式或线程没有wait方法，等待线程自然结束")
                         import time
                         time.sleep(2)  # 等待2秒确保线程停止
                         
                 except Exception as e:
                     error_msg = f"停止线程时出错: {str(e)}"
                     self._log_message(error_msg, source="find_same")
-                    print(f"[DEBUG] {error_msg}")
+                    
                 finally:
                     # 即使出错，也要清除引用
                     self.sync_thread = None
-                    print("[DEBUG] 已清除线程引用")
+                    
             
             # 确保同步引擎存在
             if not hasattr(self, 'sync_engine') or not self.sync_engine:
-                print("[DEBUG] 同步引擎不存在，正在创建...")
+                
                 # 重新初始化同步引擎
                 try:
                     self.sync_engine = SyncEngine()
-                    print("[DEBUG] 同步引擎创建成功")
+                    
                 except Exception as e:
                     error_msg = f"创建同步引擎失败: {str(e)}"
                     self._log_message(error_msg, source="find_same")
-                    print(f"[DEBUG] {error_msg}")
+                    
                     self.running = False
                     self._set_buttons_state(True)
                     return
-            else:
-                print("[DEBUG] 同步引擎已存在")
-                # 重置同步引擎状态
-                try:
-                    if hasattr(self.sync_engine, 'stop'):
-                        self.sync_engine.stop()
-                    print("[DEBUG] 同步引擎已重置")
-                except Exception as e:
-                    print(f"[DEBUG] 重置同步引擎时出错: {e}")
+            
+            # 重置同步引擎状态
+            try:
+                if hasattr(self.sync_engine, 'stop'):
+                    self.sync_engine.stop()
+            
+            except Exception as e:
+                error_msg = f"重置同步引擎时出错: {str(e)}"
+                self._log_message(error_msg, source="find_same")
             
             # 创建并启动任务线程
             try:
-                print("[DEBUG] 正在创建SyncThread...")
-                print(f"[DEBUG] 线程参数: task_type=find_same, dir_a={dir_a}, dir_b={dir_b}, ignore_patterns={ignore_patterns}")
+                
+                
                 self.sync_thread = SyncThread(
                     self.sync_engine, 
                     dir_a, 
@@ -2916,59 +2856,59 @@ class SyncApp(BaseObject):
                     task_type="find_same",
                     ignore_patterns=ignore_patterns
                 )
-                print("[DEBUG] 创建SyncThread成功")
+                
             except Exception as e:
                 error_msg = f"创建线程失败: {str(e)}"
                 self._log_message(error_msg, source="find_same")
-                print(f"[DEBUG] {error_msg}")
+                
                 self.running = False
                 self._set_buttons_state(True)
                 return
             
             if PYQT_AVAILABLE:
                 try:
-                    print("[DEBUG] PyQt模式: 连接信号到槽")
+                    
                     # 连接信号 - 使用特定的日志处理方法
                     self.sync_thread.progress_updated.connect(lambda value: self.find_same_progress_bar.setValue(value))
                     self.sync_thread.log_updated.connect(lambda msg: self._log_message(msg, source="find_same"))
                     self.sync_thread.sync_completed.connect(self._sync_completed)
                     self.sync_thread.same_files_found.connect(self._display_same_files)
                     self.sync_thread.current_file_updated.connect(self._update_current_file)
-                    print("[DEBUG] 所有信号连接完成")
+                    
                     
                     # 启动线程
-                    print("[DEBUG] 启动线程...")
+                    
                     self.sync_thread.start()
-                    print("[DEBUG] 线程已启动")
+                    
                 except Exception as e:
                     error_msg = f"启动线程失败: {str(e)}"
                     self._log_message(error_msg, source="find_same")
-                    print(f"[DEBUG] {error_msg}")
+                    
                     self.running = False
                     self._set_buttons_state(True)
             else:
                 try:
-                    print("[DEBUG] Tkinter模式: 设置回调函数")
+                    
                     # 设置回调 - Tkinter模式暂时保持使用默认日志
                     self.sync_thread.progress_callback = self._update_progress
                     self.sync_thread.log_callback = lambda msg: self._log_message(msg, source="find_same")
                     self.sync_thread.completed_callback = self._sync_completed
                     self.sync_thread.same_files_callback = self._display_same_files
                     self.sync_thread.current_file_callback = self._update_current_file
-                    print("[DEBUG] 所有回调设置完成")
+                    
                     
                     # 启动线程
-                    print("[DEBUG] 启动线程...")
+                    
                     self.sync_thread.start()
-                    print("[DEBUG] 线程已启动")
+                    
                     
                     # 启动定时器更新进度和日志
-                    print("[DEBUG] 启动定时器更新UI")
+                    
                     self._update_sync_ui()
                 except Exception as e:
                     error_msg = f"启动线程失败: {str(e)}"
                     self._log_message(error_msg, source="find_same")
-                    print(f"[DEBUG] {error_msg}")
+                    
                     self.running = False
                     self._set_buttons_state(True)
         except Exception as e:
@@ -2978,15 +2918,15 @@ class SyncApp(BaseObject):
             tb_str = traceback.format_exc()
             self._log_message(error_msg, source="find_same")
             self._log_message(f"错误详情: {tb_str}", source="find_same")
-            print(f"[DEBUG] 严重错误: {error_msg}\n{tb_str}")
             
             # 确保状态重置
             self.running = False
             try:
                 self._set_buttons_state(True)
-                print("[DEBUG] 已恢复按钮状态")
+            
             except Exception as inner_e:
-                print(f"[DEBUG] 恢复按钮状态时出错: {inner_e}")
+                error_msg = f"恢复按钮状态时出错: {str(inner_e)}"
+                self._log_message(error_msg, source="find_same")
     
     def _find_duplicate_files(self):
         """开始查找重复文件"""
@@ -3198,6 +3138,14 @@ class SyncApp(BaseObject):
         # 创建右键菜单
         menu = QMenu()
         
+        # 添加打开文件夹操作
+        open_folder_action = QAction("打开文件所在文件夹", self.window)
+        open_folder_action.triggered.connect(lambda: self._open_duplicate_file_folder(row))
+        menu.addAction(open_folder_action)
+        
+        # 添加分隔线
+        menu.addSeparator()
+        
         # 添加删除当前文件操作
         delete_action = QAction("删除此文件", self.window)
         delete_action.triggered.connect(lambda: self._delete_single_duplicate_file(row))
@@ -3207,7 +3155,7 @@ class SyncApp(BaseObject):
         menu.exec(self.duplicate_files_table.mapToGlobal(position))
     
     def _delete_single_duplicate_file(self, row):
-        """删除单个重复文件"""
+        """删除单个重复文件（移动到回收站）"""
         if not PYQT_AVAILABLE:
             return
         
@@ -3218,24 +3166,75 @@ class SyncApp(BaseObject):
         
         file_path = path_item.text()
         
+        # 规范化路径
+        file_path = os.path.normpath(file_path)
+        
         # 显示确认对话框
-        confirm_text = f"确定要删除文件 '{file_path}' 吗？此操作不可恢复。"
+        confirm_text = f"确定要删除文件 '{file_path}' 吗？\n文件将被移动到回收站。"
         reply = QMessageBox.question(self.window, "确认删除", confirm_text,
                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
         
-        # 标记为选中（准备删除）
-        check_item = self.duplicate_files_table.item(row, 0)
-        if check_item:
-            # 临时断开信号连接以避免触发不必要的更新
-            self.duplicate_files_table.itemChanged.disconnect(self._on_duplicate_item_changed)
-            check_item.setCheckState(Qt.CheckState.Checked)
-            # 重新连接信号
-            self.duplicate_files_table.itemChanged.connect(self._on_duplicate_item_changed)
+        # 删除文件（移动到回收站）
+        try:
+            if os.path.exists(file_path):
+                try:
+                    from send2trash import send2trash
+                    send2trash(file_path)
+                    self.logger.info(f"已将文件移动到回收站: {file_path}")
+                except ImportError:
+                    # 如果send2trash不可用，使用系统命令
+                    if sys.platform == "win32":
+                        subprocess.run(f'del /f /q "{file_path}"', shell=True)
+                    else:
+                        os.remove(file_path)
+                    self.logger.warning(f"send2trash不可用，已直接删除文件: {file_path}")
+                
+                # 从表格中移除
+                self.duplicate_files_table.removeRow(row)
+            else:
+                QMessageBox.warning(self.window, "警告", f"文件不存在: {file_path}")
+        except Exception as e:
+            self.logger.error(f"删除文件 {file_path} 失败: {e}")
+            QMessageBox.warning(self.window, "错误", f"删除文件失败: {str(e)}")
+    
+    def _open_duplicate_file_folder(self, row):
+        """打开重复文件所在的文件夹"""
+        if not PYQT_AVAILABLE:
+            return
         
-        # 调用删除方法
-        self._delete_selected_duplicate_files()
+        # 获取文件路径
+        path_item = self.duplicate_files_table.item(row, 1)
+        if not path_item:
+            return
+        
+        file_path = path_item.text()
+        
+        # 规范化路径，确保使用正确的路径分隔符
+        file_path = os.path.normpath(file_path)
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self.window, "警告", f"文件不存在: {file_path}")
+            return
+        
+        folder_path = os.path.dirname(file_path)
+        
+        try:
+            if sys.platform == "win32":
+                # Windows: 使用 explorer 命令并选中文件
+                import os as os_module
+                os_module.startfile(folder_path)
+            elif sys.platform == "darwin":
+                # macOS: 使用 open 命令
+                subprocess.run(['open', '-R', file_path])
+            else:
+                # Linux: 使用 xdg-open 命令
+                subprocess.run(['xdg-open', folder_path])
+            self.logger.info(f"已打开文件夹: {folder_path}")
+        except Exception as e:
+            self.logger.error(f"打开文件夹失败: {e}")
+            QMessageBox.warning(self.window, "错误", f"打开文件夹失败: {str(e)}")
     
     def _deselect_all_duplicate_files(self):
         """取消选中所有重复文件"""
@@ -3476,7 +3475,7 @@ class SyncApp(BaseObject):
                     self.duplicate_files_table.itemChanged.connect(self._on_duplicate_item_changed)
     
     def _delete_selected_duplicate_files(self):
-        """删除选中的重复文件"""
+        """删除选中的重复文件（移动到回收站）"""
         selected_files = []
         
         if PYQT_AVAILABLE:
@@ -3502,7 +3501,7 @@ class SyncApp(BaseObject):
         
         # 显示确认对话框
         file_count = len(selected_files)
-        confirm_text = f"确定要删除选中的 {file_count} 个文件吗？此操作不可恢复。"
+        confirm_text = f"确定要删除选中的 {file_count} 个文件吗？\n文件将被移动到回收站。"
         
         if PYQT_AVAILABLE:
             reply = QMessageBox.question(self.window, "确认删除", confirm_text, 
@@ -3524,8 +3523,22 @@ class SyncApp(BaseObject):
         
         for file_path in selected_files:
             try:
+                # 规范化路径
+                file_path = os.path.normpath(file_path)
+                
                 if os.path.exists(file_path):
-                    os.remove(file_path)
+                    try:
+                        from send2trash import send2trash
+                        send2trash(file_path)
+                        self.logger.info(f"已将文件移动到回收站: {file_path}")
+                    except ImportError:
+                        # 如果send2trash不可用，使用系统命令
+                        if sys.platform == "win32":
+                            subprocess.run(f'del /f /q "{file_path}"', shell=True)
+                        else:
+                            os.remove(file_path)
+                        self.logger.warning(f"send2trash不可用，已直接删除文件: {file_path}")
+                    
                     deleted_count += 1
                     self._log_message(f"已删除: {file_path}")
                     # 从UI中移除已删除的文件
@@ -3541,6 +3554,10 @@ class SyncApp(BaseObject):
                             if self.duplicate_files_tree.item(item, 'text') == file_path:
                                 self.duplicate_files_tree.delete(item)
                                 break
+                else:
+                    failed_count += 1
+                    failed_files.append(f"{file_path}: 文件不存在")
+                    self._log_message(f"删除失败: {file_path}, 错误: 文件不存在")
             except Exception as e:
                 failed_count += 1
                 failed_files.append(f"{file_path}: {str(e)}")
@@ -3629,20 +3646,24 @@ class SyncApp(BaseObject):
                 self.same_files_tree.delete(item)
     
     def _delete_file(self, file_a, file_b, delete_type="all"):
-        """删除指定的文件
+        """删除指定的文件（移动到回收站）
         
         Args:
             file_a: 源文件路径
             file_b: 目标文件路径
             delete_type: 删除类型，"a"表示只删除源文件，"b"表示只删除目标文件，"all"表示删除两个文件
         """
+        # 规范化路径
+        file_a = os.path.normpath(file_a)
+        file_b = os.path.normpath(file_b)
+        
         # 根据删除类型构建确认消息
         if delete_type == "a":
-            message = f"确定要删除源文件吗？\n{file_a}"
+            message = f"确定要删除源文件吗？\n{file_a}\n文件将被移动到回收站。"
         elif delete_type == "b":
-            message = f"确定要删除目标文件吗？\n{file_b}"
+            message = f"确定要删除目标文件吗？\n{file_b}\n文件将被移动到回收站。"
         else:
-            message = f"确定要删除这两个文件吗？\n{file_a}\n{file_b}"
+            message = f"确定要删除这两个文件吗？\n{file_a}\n{file_b}\n文件将被移动到回收站。"
         
         # 显示确认对话框
         confirmed = False
@@ -3663,12 +3684,32 @@ class SyncApp(BaseObject):
         
         if confirmed:
             try:
-                # 根据删除类型删除文件
+                # 根据删除类型删除文件（移动到回收站）
                 if delete_type in ["a", "all"] and os.path.exists(file_a):
-                    os.remove(file_a)
+                    try:
+                        from send2trash import send2trash
+                        send2trash(file_a)
+                        self.logger.info(f"已将文件移动到回收站: {file_a}")
+                    except ImportError:
+                        # 如果send2trash不可用，使用系统命令
+                        if sys.platform == "win32":
+                            subprocess.run(f'del /f /q "{file_a}"', shell=True)
+                        else:
+                            os.remove(file_a)
+                        self.logger.warning(f"send2trash不可用，已直接删除文件: {file_a}")
                     self._log_message(f"已删除源文件: {file_a}")
                 if delete_type in ["b", "all"] and os.path.exists(file_b):
-                    os.remove(file_b)
+                    try:
+                        from send2trash import send2trash
+                        send2trash(file_b)
+                        self.logger.info(f"已将文件移动到回收站: {file_b}")
+                    except ImportError:
+                        # 如果send2trash不可用，使用系统命令
+                        if sys.platform == "win32":
+                            subprocess.run(f'del /f /q "{file_b}"', shell=True)
+                        else:
+                            os.remove(file_b)
+                        self.logger.warning(f"send2trash不可用，已直接删除文件: {file_b}")
                     self._log_message(f"已删除目标文件: {file_b}")
                 
                 # 从列表中移除
@@ -3729,7 +3770,7 @@ class SyncApp(BaseObject):
                     "all": "所有选中的文件"
                 }
                 
-                confirm_msg = f"确定要删除{delete_type_text.get(delete_type, '')}吗？\n\n"
+                confirm_msg = f"确定要删除{delete_type_text.get(delete_type, '')}吗？\n文件将被移动到回收站。\n\n"
                 confirm_msg += "\n".join(files_to_delete[:10])  # 只显示前10个文件
                 if len(files_to_delete) > 10:
                     confirm_msg += f"\n... 以及其他 {len(files_to_delete) - 10} 个文件"
@@ -3802,7 +3843,7 @@ class SyncApp(BaseObject):
                             files_to_delete.append(f"[文件夹B] {os.path.basename(file_b)}")
                     
                     # 显示确认对话框，列出要删除的文件
-                    confirm_msg = f"确定要删除以下 {len(files_to_delete)} 个文件吗？\n\n"
+                    confirm_msg = f"确定要删除以下 {len(files_to_delete)} 个文件吗？\n文件将被移动到回收站。\n\n"
                     confirm_msg += "\n".join(files_to_delete[:10])  # 只显示前10个文件
                     if len(files_to_delete) > 10:
                         confirm_msg += f"\n... 以及其他 {len(files_to_delete) - 10} 个文件"
@@ -3826,16 +3867,36 @@ class SyncApp(BaseObject):
             fail_count = 0
             
             for row in sorted(selected_rows, reverse=True):
-                file_a = self.find_same_files_table.item(row, 0).text()
-                file_b = self.find_same_files_table.item(row, 1).text()
+                file_a = os.path.normpath(self.find_same_files_table.item(row, 0).text())
+                file_b = os.path.normpath(self.find_same_files_table.item(row, 1).text())
                 
                 try:
-                    # 根据删除类型删除文件
+                    # 根据删除类型删除文件（移动到回收站）
                     if delete_type in ["a", "all"] and os.path.exists(file_a):
-                        os.remove(file_a)
+                        try:
+                            from send2trash import send2trash
+                            send2trash(file_a)
+                            self.logger.info(f"已将文件移动到回收站: {file_a}")
+                        except ImportError:
+                            # 如果send2trash不可用，使用系统命令
+                            if sys.platform == "win32":
+                                subprocess.run(f'del /f /q "{file_a}"', shell=True)
+                            else:
+                                os.remove(file_a)
+                            self.logger.warning(f"send2trash不可用，已直接删除文件: {file_a}")
                         self._log_message(f"已删除文件: {file_a}", source="find_same")
                     if delete_type in ["b", "all"] and os.path.exists(file_b):
-                        os.remove(file_b)
+                        try:
+                            from send2trash import send2trash
+                            send2trash(file_b)
+                            self.logger.info(f"已将文件移动到回收站: {file_b}")
+                        except ImportError:
+                            # 如果send2trash不可用，使用系统命令
+                            if sys.platform == "win32":
+                                subprocess.run(f'del /f /q "{file_b}"', shell=True)
+                            else:
+                                os.remove(file_b)
+                            self.logger.warning(f"send2trash不可用，已直接删除文件: {file_b}")
                         self._log_message(f"已删除文件: {file_b}", source="find_same")
                     
                     self.find_same_files_table.removeRow(row)
@@ -3890,6 +3951,168 @@ class SyncApp(BaseObject):
                         self.same_files_tree.delete(item)
                     except Exception as e:
                         self._log_message(f"删除文件失败: {str(e)}", source="find_same")
+    
+    def _show_find_same_context_menu(self, position):
+        """显示相同文件表格的右键菜单"""
+        if not PYQT_AVAILABLE:
+            return
+        
+        # 获取当前点击的单元格
+        index = self.find_same_files_table.indexAt(position)
+        if not index.isValid():
+            return
+        
+        row = index.row()
+        column = index.column()
+        
+        # 创建右键菜单
+        menu = QMenu()
+        
+        # 根据点击的列确定要操作的文件
+        if column == 0:
+            # 点击的是文件夹A文件
+            file_path = self.find_same_files_table.item(row, 0).text()
+            menu_title = f"文件夹A文件: {os.path.basename(file_path)}"
+            open_folder_action = QAction("打开文件夹A文件所在文件夹", self.window)
+            open_folder_action.triggered.connect(lambda: self._open_find_same_file_folder(row, "a"))
+            menu.addAction(open_folder_action)
+            
+            menu.addSeparator()
+            
+            delete_action = QAction("删除文件夹A文件", self.window)
+            delete_action.triggered.connect(lambda: self._delete_single_find_same_file(row, "a"))
+            menu.addAction(delete_action)
+        elif column == 1:
+            # 点击的是文件夹B文件
+            file_path = self.find_same_files_table.item(row, 1).text()
+            menu_title = f"文件夹B文件: {os.path.basename(file_path)}"
+            open_folder_action = QAction("打开文件夹B文件所在文件夹", self.window)
+            open_folder_action.triggered.connect(lambda: self._open_find_same_file_folder(row, "b"))
+            menu.addAction(open_folder_action)
+            
+            menu.addSeparator()
+            
+            delete_action = QAction("删除文件夹B文件", self.window)
+            delete_action.triggered.connect(lambda: self._delete_single_find_same_file(row, "b"))
+            menu.addAction(delete_action)
+        else:
+            # 点击的是其他列，显示两个文件的选项
+            file_a = self.find_same_files_table.item(row, 0).text()
+            file_b = self.find_same_files_table.item(row, 1).text()
+            
+            # 文件夹A文件选项
+            open_folder_a_action = QAction("打开文件夹A文件所在文件夹", self.window)
+            open_folder_a_action.triggered.connect(lambda: self._open_find_same_file_folder(row, "a"))
+            menu.addAction(open_folder_a_action)
+            
+            delete_a_action = QAction("删除文件夹A文件", self.window)
+            delete_a_action.triggered.connect(lambda: self._delete_single_find_same_file(row, "a"))
+            menu.addAction(delete_a_action)
+            
+            menu.addSeparator()
+            
+            # 文件夹B文件选项
+            open_folder_b_action = QAction("打开文件夹B文件所在文件夹", self.window)
+            open_folder_b_action.triggered.connect(lambda: self._open_find_same_file_folder(row, "b"))
+            menu.addAction(open_folder_b_action)
+            
+            delete_b_action = QAction("删除文件夹B文件", self.window)
+            delete_b_action.triggered.connect(lambda: self._delete_single_find_same_file(row, "b"))
+            menu.addAction(delete_b_action)
+        
+        # 显示菜单
+        menu.exec(self.find_same_files_table.mapToGlobal(position))
+    
+    def _open_find_same_file_folder(self, row, file_type):
+        """打开相同文件所在的文件夹
+        
+        Args:
+            row: 行号
+            file_type: 文件类型，"a"表示文件夹A文件，"b"表示文件夹B文件
+        """
+        if not PYQT_AVAILABLE:
+            return
+        
+        # 获取文件路径
+        if file_type == "a":
+            file_path = self.find_same_files_table.item(row, 0).text()
+        else:
+            file_path = self.find_same_files_table.item(row, 1).text()
+        
+        # 规范化路径
+        file_path = os.path.normpath(file_path)
+        
+        # 获取文件所在文件夹
+        folder_path = os.path.dirname(file_path)
+        
+        if not os.path.exists(folder_path):
+            QMessageBox.warning(self.window, "警告", f"文件夹不存在: {folder_path}")
+            return
+        
+        try:
+            if sys.platform == "win32":
+                # Windows系统
+                subprocess.run(f'explorer.exe /select,"{file_path}"', shell=True)
+            elif sys.platform == "darwin":
+                # macOS系统
+                subprocess.run(['open', '-R', file_path])
+            else:
+                # Linux系统
+                subprocess.run(['xdg-open', folder_path])
+        except Exception as e:
+            self.logger.error(f"打开文件夹失败: {e}")
+            QMessageBox.warning(self.window, "错误", f"打开文件夹失败: {str(e)}")
+    
+    def _delete_single_find_same_file(self, row, file_type):
+        """删除单个相同文件（移动到回收站）
+        
+        Args:
+            row: 行号
+            file_type: 文件类型，"a"表示文件夹A文件，"b"表示文件夹B文件
+        """
+        if not PYQT_AVAILABLE:
+            return
+        
+        # 获取文件路径
+        if file_type == "a":
+            file_path = self.find_same_files_table.item(row, 0).text()
+            delete_type = "a"
+        else:
+            file_path = self.find_same_files_table.item(row, 1).text()
+            delete_type = "b"
+        
+        # 规范化路径
+        file_path = os.path.normpath(file_path)
+        
+        # 显示确认对话框
+        confirm_text = f"确定要删除文件 '{file_path}' 吗？\n文件将被移动到回收站。"
+        reply = QMessageBox.question(self.window, "确认删除", confirm_text,
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # 删除文件（移动到回收站）
+        try:
+            if os.path.exists(file_path):
+                try:
+                    from send2trash import send2trash
+                    send2trash(file_path)
+                    self.logger.info(f"已将文件移动到回收站: {file_path}")
+                except ImportError:
+                    # 如果send2trash不可用，使用系统命令
+                    if sys.platform == "win32":
+                        subprocess.run(f'del /f /q "{file_path}"', shell=True)
+                    else:
+                        os.remove(file_path)
+                    self.logger.warning(f"send2trash不可用，已直接删除文件: {file_path}")
+                
+                # 从表格中移除
+                self.find_same_files_table.removeRow(row)
+            else:
+                QMessageBox.warning(self.window, "警告", f"文件不存在: {file_path}")
+        except Exception as e:
+            self.logger.error(f"删除文件 {file_path} 失败: {e}")
+            QMessageBox.warning(self.window, "错误", f"删除文件失败: {str(e)}")
     
     def _update_sync_ui(self):
         """更新同步UI（Tkinter模式）"""
@@ -3961,26 +4184,26 @@ class SyncApp(BaseObject):
         
     def _cleanup_thread_resources(self):
         """安全清理线程资源"""
-        print("[DEBUG] 开始执行_cleanup_thread_resources")
+        
         thread_attributes = ['sync_thread', 'same_files_thread', 'duplicate_finder_thread', 'file_slimming_thread']
         
         try:
             for attr_name in thread_attributes:
-                print(f"[DEBUG] 开始清理线程属性: {attr_name}")
+                
                 
                 # 检查线程是否存在
                 if hasattr(self, attr_name) and getattr(self, attr_name) is not None:
                     thread = getattr(self, attr_name)
-                    print(f"[DEBUG] 找到线程: {attr_name}")
+                    
                     
                     # 先尝试安全停止线程
                     if hasattr(thread, 'stop'):
                         try:
-                            print(f"[DEBUG] 调用线程 {attr_name} 的stop方法")
+                            
                             thread.stop()
-                            print(f"[DEBUG] 线程 {attr_name} 停止方法调用成功")
+                        
                         except Exception as e:
-                            print(f"[DEBUG] 调用线程 {attr_name} stop方法异常: {e}")
+                            error_msg = f"停止线程 {attr_name} 时出错: {str(e)}"
                     
                     # 断开所有信号连接
                     signals_to_disconnect = ['progress_updated', 'log_updated', 'sync_completed', 
@@ -3993,15 +4216,14 @@ class SyncApp(BaseObject):
                                 signal = getattr(thread, signal_name)
                                 if hasattr(signal, 'disconnect'):
                                     signal.disconnect()
-                                    print(f"[DEBUG] 线程 {attr_name} 断开信号 {signal_name} 成功")
+                        
                         except Exception as e:
-                            print(f"[DEBUG] 线程 {attr_name} 断开信号 {signal_name} 异常: {e}")
+                            error_msg = f"断开信号 {signal_name} 时出错: {str(e)}"
                     
                     # 等待线程完全终止
                     if hasattr(thread, 'wait') and hasattr(thread, 'isRunning'):
                         try:
                             if thread.isRunning():
-                                print(f"[DEBUG] 等待线程 {attr_name} 完成...")
                                 # 分多次等待，增加超时处理
                                 wait_time = 500
                                 total_wait = 0
@@ -4010,35 +4232,28 @@ class SyncApp(BaseObject):
                                 while thread.isRunning() and total_wait < max_wait:
                                     thread.wait(wait_time)
                                     total_wait += wait_time
-                                    print(f"[DEBUG] 线程 {attr_name} 等待中，已等待: {total_wait}ms")
                                 
                                 # 如果线程仍在运行，尝试强制终止
                                 if hasattr(thread, 'terminate') and thread.isRunning():
                                     try:
-                                        print(f"[DEBUG] 线程 {attr_name} 仍在运行，尝试强制终止")
                                         thread.terminate()
-                                        print(f"[DEBUG] 线程 {attr_name} 强制终止命令已发出")
+                                        
                                         # 再等待一下确保终止
                                         thread.wait(1000)
                                     except Exception as e:
-                                        print(f"[DEBUG] 强制终止线程 {attr_name} 异常: {e}")
-                                
-                                print(f"[DEBUG] 线程 {attr_name} 等待完成，总等待时间: {total_wait}ms")
+                                        error_msg = f"强制终止线程 {attr_name} 时出错: {str(e)}"
+                        
                         except Exception as e:
-                            print(f"[DEBUG] 等待线程 {attr_name} 完成异常: {e}")
+                            error_msg = f"等待线程 {attr_name} 完成时出错: {str(e)}"
                     
                     # 清理线程引用，让垃圾回收可以回收
-                    print(f"[DEBUG] 删除线程 {attr_name} 引用")
                     setattr(self, attr_name, None)
-                    print(f"[DEBUG] 线程 {attr_name} 引用已设为None")
-            
-            print("[DEBUG] 所有线程资源清理完成")
+        
         except Exception as e:
-            print(f"[DEBUG] 线程资源清理过程异常: {e}")
             import traceback
-            print(f"[DEBUG] 异常堆栈:\n{traceback.format_exc()}")
-        finally:
-            print("[DEBUG] _cleanup_thread_resources 执行完成")
+            error_msg = f"线程资源清理过程异常: {str(e)}"
+            self._log_message(error_msg, source="sync")
+            self._log_message(f"异常堆栈:\n{traceback.format_exc()}", source="sync")
     
     def _update_progress(self, value):
         """更新进度条"""
@@ -4692,8 +4907,7 @@ class SyncApp(BaseObject):
             from PyQt6.QtCore import QModelIndex
             self.find_same_target_tree.setRootIndex(QModelIndex())
 
-        # 启动防抖定时器
-        self._schedule_find_same_compare()
+        # 不再自动启动比对，需要用户手动点击"查找相同文件"按钮
 
     def _schedule_find_same_compare(self):
         """启动相同文件比对防抖定时器，避免频繁触发比对"""
@@ -5718,9 +5932,8 @@ class SyncApp(BaseObject):
                     base = os.getcwd()
                 except Exception:
                     base = None
+            # 不再自动设置文件夹路径，保持为空等待用户手动选择
             if base and os.path.isdir(base):
-                self.sync_folder_a_edit.setText(base)
-                self.sync_folder_b_edit.setText(base)
                 try:
                     self._set_root_index_safe(self.sync_source_tree, self.sync_source_model, base)
                     self._set_root_index_safe(self.sync_target_tree, self.sync_target_model, base)
@@ -6016,7 +6229,7 @@ class SyncApp(BaseObject):
             self.file_slimming_files_table.setItem(row_position, 1, path_item)
             
             # 设置文件大小单元格
-            size_item = SizeTableWidgetItem(self._format_file_size(file_info["size"]), file_info["size"])
+            size_item = FileTableWidgetItem(self._format_file_size(file_info["size"]), file_size=file_info["size"])
             self.file_slimming_files_table.setItem(row_position, 2, size_item)
             
             # 设置修改时间单元格
@@ -6025,9 +6238,7 @@ class SyncApp(BaseObject):
         
         # 重新启用排序并设置默认排序（按文件大小降序）
         self.file_slimming_files_table.setSortingEnabled(True)
-        
-        # 强制触发排序
-        self.file_slimming_files_table.horizontalHeader().setSortIndicator(2, Qt.SortOrder.DescendingOrder)
+        self.file_slimming_files_table.sortByColumn(2, Qt.SortOrder.DescendingOrder)
         
         # 更新状态栏
         self.status_bar.showMessage(f"扫描完成: 找到 {len(files_data)} 个文件")
@@ -6100,7 +6311,7 @@ class SyncApp(BaseObject):
         self.status_bar.showMessage(f"{operation_name}完成: 成功 {success_count} 个文件, 失败 {failed_count} 个")
     
     def _delete_selected_files_from_slimming(self):
-        """删除选中的文件"""
+        """删除选中的文件（移动到回收站）"""
         selected_items = self.file_slimming_files_table.selectedItems()
         if not selected_items:
             QMessageBox.information(self.window, "提示", "请先选择要删除的文件")
@@ -6115,7 +6326,7 @@ class SyncApp(BaseObject):
         reply = QMessageBox.question(
             self.window,
             "确认删除",
-            f"确定要删除选中的 {len(selected_rows)} 个文件吗？此操作无法撤销。",
+            f"确定要删除选中的 {len(selected_rows)} 个文件吗？\n文件将被移动到回收站。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
@@ -6123,15 +6334,28 @@ class SyncApp(BaseObject):
         if reply != QMessageBox.StandardButton.Yes:
             return
         
-        # 删除文件
+        # 删除文件（移动到回收站）
         deleted_count = 0
         failed_count = 0
         for row in sorted(selected_rows, reverse=True):
             file_path = self.file_slimming_files_table.item(row, 1).text()
             try:
+                # 规范化路径，确保使用正确的路径分隔符
+                file_path = os.path.normpath(file_path)
+                
                 # 检查文件是否存在
                 if os.path.exists(file_path):
-                    os.remove(file_path)
+                    try:
+                        from send2trash import send2trash
+                        send2trash(file_path)
+                        self.logger.info(f"已将文件移动到回收站: {file_path}")
+                    except ImportError:
+                        # 如果send2trash不可用，使用系统命令
+                        if sys.platform == "win32":
+                            subprocess.run(f'del /f /q "{file_path}"', shell=True)
+                        else:
+                            os.remove(file_path)
+                        self.logger.warning(f"send2trash不可用，已直接删除文件: {file_path}")
                     self.file_slimming_files_table.removeRow(row)
                     deleted_count += 1
                 else:
@@ -6144,7 +6368,7 @@ class SyncApp(BaseObject):
                 failed_count += 1
         
         # 更新状态栏
-        self.status_bar.showMessage(f"删除完成: 成功删除 {deleted_count} 个文件, 失败 {failed_count} 个")
+        self.status_bar.showMessage(f"删除完成: 成功删除 {deleted_count} 个文件, 失败 {failed_count} 个文件")
     
     def _reset_file_slimming_ui(self):
         """重置文件夹搜身界面状态"""
@@ -6162,6 +6386,14 @@ class SyncApp(BaseObject):
         
         # 创建右键菜单
         context_menu = QMenu()
+        
+        # 添加打开文件夹操作
+        open_folder_action = QAction("打开文件所在文件夹", self.window)
+        open_folder_action.triggered.connect(self._open_file_folder)
+        context_menu.addAction(open_folder_action)
+        
+        # 添加分隔线
+        context_menu.addSeparator()
         
         # 添加删除操作
         delete_action = QAction("删除选中文件", self.window)
@@ -6495,6 +6727,47 @@ class SyncApp(BaseObject):
             self._log_message(f"删除目录时出错 {path}: {str(e)}", source="folder_size")
             raise
     
+    def _open_file_folder(self):
+        """打开文件所在的文件夹"""
+        selected_items = self.file_slimming_files_table.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self.window, "提示", "请先选择要打开的文件")
+            return
+        
+        # 获取第一个选中文件的路径
+        selected_rows = set()
+        for item in selected_items:
+            selected_rows.add(item.row())
+        
+        # 只打开第一个选中文件的文件夹
+        row = sorted(selected_rows)[0]
+        file_path = self.file_slimming_files_table.item(row, 1).text()
+        
+        # 规范化路径，确保使用正确的路径分隔符
+        file_path = os.path.normpath(file_path)
+        
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self.window, "警告", f"文件不存在: {file_path}")
+            return
+        
+        folder_path = os.path.dirname(file_path)
+        
+        try:
+            if sys.platform == "win32":
+                # Windows: 使用 explorer 命令并选中文件
+                import os as os_module
+                os_module.startfile(folder_path)
+            elif sys.platform == "darwin":
+                # macOS: 使用 open 命令
+                subprocess.run(['open', '-R', file_path])
+            else:
+                # Linux: 使用 xdg-open 命令
+                subprocess.run(['xdg-open', folder_path])
+            self.logger.info(f"已打开文件夹: {folder_path}")
+        except Exception as e:
+            self.logger.error(f"打开文件夹失败: {e}")
+            QMessageBox.warning(self.window, "错误", f"打开文件夹失败: {str(e)}")
+    
     def run(self):
         """运行应用"""
         try:
@@ -6516,10 +6789,10 @@ class SyncApp(BaseObject):
                 
                 # 设置应用程序退出前的清理操作
                 def cleanup_on_exit():
-                    print("[DEBUG] 开始应用程序退出清理")
+                    
                     # 确保清理线程资源
                     self._cleanup_thread_resources()
-                    print("[DEBUG] 应用程序退出清理完成")
+                    
                 
                 # 连接关闭信号
                 if hasattr(self.app, 'aboutToQuit'):
@@ -6560,3 +6833,6 @@ class SyncApp(BaseObject):
             except:
                 pass
             return 1
+
+
+
