@@ -33,17 +33,52 @@ class SyncEngine:
         self._current_file = ""
         self._log_file_handle: Optional[Any] = None
         self._log_file_path = os.path.join(os.getcwd(), "log.txt")
+        self._progress_callback: Optional[callable] = None
+        self._log_callback: Optional[callable] = None
+        self._shutdown = False
+    
+    def set_progress_callback(self, callback: callable) -> None:
+        """设置进度回调函数"""
+        self._progress_callback = callback
+    
+    def _notify_progress(self) -> None:
+        """通知进度更新"""
+        if self._shutdown:
+            return
+            
+        self._current_progress = self.get_progress()
+        if self._progress_callback:
+            try:
+                self._progress_callback(self._current_progress, self._current_file)
+            except Exception as e:
+                pass
+        
+        # 仅在设置了 log_callback 时才发送日志
+        if hasattr(self, '_log_callback') and self._log_callback:
+            if len(self._sync_log) > getattr(self, '_last_log_sent', 0):
+                new_logs = self._sync_log[getattr(self, '_last_log_sent', 0):]
+                for log in new_logs:
+                    try:
+                        self._log_callback(log)
+                    except Exception:
+                        pass
+                self._last_log_sent = len(self._sync_log)
+    
+    def set_log_callback(self, callback: callable) -> None:
+        """设置日志回调函数"""
+        self._log_callback = callback
     
     def stop(self) -> None:
         """停止同步任务"""
+        self._shutdown = True
         self._stop_requested = True
         self._log_message("同步任务已停止")
         if self._log_file_handle is not None:
             try:
                 self._log_file_handle.close()
                 self._log_file_handle = None
-            except Exception as e:
-                logging.error(f"关闭日志文件失败: {str(e)}")
+            except Exception:
+                pass
     
     def pause(self) -> None:
         """暂停同步任务"""
@@ -85,6 +120,9 @@ class SyncEngine:
             message: 日志消息
             log_type: 日志类型 (info, warning, error)
         """
+        if self._shutdown:
+            return
+            
         try:
             safe_message = str(message).encode('utf-8', errors='ignore').decode('utf-8')
             timestamp = format_timestamp()
@@ -104,9 +142,9 @@ class SyncEngine:
                 self._log_file_handle.write(f"{log_entry}\n")
                 self._log_file_handle.flush()
             except Exception as e:
-                logging.error(f"写入日志文件失败: {str(e)}")
+                pass
         except Exception as e:
-            logging.error(f"日志记录失败: {str(e)}")
+            pass
     
     def _check_pause_stop(self) -> bool:
         """检查是否需要暂停或停止"""
@@ -235,8 +273,9 @@ class SyncEngine:
             if self._stop_requested:
                 return False
             
-            # 计算总文件数
-            self._total_files = max(len(source_files), len(dest_files))
+            # 计算总文件数（包括源文件处理和删除操作）
+            delete_count = sum(1 for rel_path in dest_files if rel_path not in source_files)
+            self._total_files = len(source_files) + delete_count
             
             # 执行同步
             operations = 0
@@ -251,6 +290,7 @@ class SyncEngine:
                 if rel_path not in dest_files:
                     # 文件不存在，需要复制
                     self._log_message(f"复制文件: {rel_path}")
+                    self._current_file = rel_path
                     if copy_file(source_info['path'], dest_path):
                         operations += 1
                 else:
@@ -258,10 +298,12 @@ class SyncEngine:
                     dest_info = dest_files[rel_path]
                     if source_info['mtime'] > dest_info['mtime'] or source_info['size'] != dest_info['size']:
                         self._log_message(f"更新文件: {rel_path}")
+                        self._current_file = rel_path
                         if copy_file(source_info['path'], dest_path, overwrite=True):
                             operations += 1
                 
                 self._processed_files += 1
+                self._notify_progress()
             
             # 2. 同步删除（如果启用）- 删除多余的文件和文件夹
             if sync_delete:
@@ -278,10 +320,12 @@ class SyncEngine:
                         dest_path = dest_info['path']
                         if os.path.isfile(dest_path):
                             self._log_message(f"删除文件: {rel_path}")
+                            self._current_file = rel_path
                             if delete_file(dest_path):
                                 operations += 1
                     
                     self._processed_files += 1
+                    self._notify_progress()
                 
                 # 删除多余的文件夹（从深到浅删除，避免删除父目录时子目录已不存在）
                 dirs_to_delete = []
@@ -301,9 +345,13 @@ class SyncEngine:
                         return False
                     if os.path.exists(dest_dir_path):
                         self._log_message(f"删除文件夹: {rel_dir}")
+                        self._current_file = rel_dir
                         if delete_directory(dest_dir_path):
                             operations += 1
             
+            self._current_file = ""
+            self._processed_files = self._total_files
+            self._notify_progress()
             self._log_message(f"同步完成。执行操作数: {operations}")
             return True
             
@@ -355,7 +403,7 @@ class SyncEngine:
                 return False
             
             # 计算总文件数
-            self._total_files = max(len(files_a), len(files_b)) * 2
+            self._total_files = len(files_a) + len(files_b)
             
             # 执行双向同步
             operations = 0
@@ -369,7 +417,8 @@ class SyncEngine:
                 if rel_path not in files_b:
                     # A有B没有，复制到B
                     dest_path = os.path.join(dir_b, rel_path)
-                    self._log_message(f"从A复制到B: {rel_path}")
+                    self._log_message(f"复制: {rel_path}")
+                    self._current_file = f"A→B: {rel_path}"
                     if copy_file(info_a['path'], dest_path):
                         operations += 1
                 else:
@@ -378,7 +427,8 @@ class SyncEngine:
                     if info_a['mtime'] > info_b['mtime']:
                         # A较新，复制到B
                         dest_path = os.path.join(dir_b, rel_path)
-                        self._log_message(f"A较新，更新到B: {rel_path}")
+                        self._log_message(f"更新: {rel_path}")
+                        self._current_file = f"A→B: {rel_path}"
                         if copy_file(info_a['path'], dest_path, overwrite=True):
                             operations += 1
                     elif info_b['mtime'] > info_a['mtime']:
@@ -390,6 +440,7 @@ class SyncEngine:
                         self._log_message(f"警告：文件冲突（时间相同但大小不同）: {rel_path}", "warning")
                 
                 self._processed_files += 1
+                self._notify_progress()
             
             # 2. B → A 的同步
             for rel_path, info_b in files_b.items():
@@ -399,7 +450,8 @@ class SyncEngine:
                 if rel_path not in files_a:
                     # B有A没有，复制到A
                     dest_path = os.path.join(dir_a, rel_path)
-                    self._log_message(f"从B复制到A: {rel_path}")
+                    self._log_message(f"复制: {rel_path}")
+                    self._current_file = f"B→A: {rel_path}"
                     if copy_file(info_b['path'], dest_path):
                         operations += 1
                 else:
@@ -408,11 +460,13 @@ class SyncEngine:
                     if info_b['mtime'] > info_a['mtime']:
                         # B较新，复制到A
                         dest_path = os.path.join(dir_a, rel_path)
-                        self._log_message(f"B较新，更新到A: {rel_path}")
+                        self._log_message(f"更新: {rel_path}")
+                        self._current_file = f"B→A: {rel_path}"
                         if copy_file(info_b['path'], dest_path, overwrite=True):
                             operations += 1
                 
                 self._processed_files += 1
+                self._notify_progress()
             
             # 3. 同步删除（如果启用）- 优化后的安全策略
             if sync_delete:
@@ -446,7 +500,10 @@ class SyncEngine:
                 if len(conflicts) > 10:
                     self._log_message(f"... 还有{len(conflicts) - 10}个冲突文件", "warning")
             
-            self._log_message(f"双向同步完成。执行操作数: {operations}")
+            self._current_file = ""
+            self._processed_files = self._total_files
+            self._notify_progress()
+            self._log_message(f"双向同步完成。共执行 {operations} 个操作")
             return True
             
         except Exception as e:

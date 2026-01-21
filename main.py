@@ -63,11 +63,44 @@ except ImportError as e:
     raise
 
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """全局异常处理函数"""
+    import traceback
+    error_msg = f"程序发生未处理的异常:\n\n{''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))}"
+    logging.error(f"未处理的异常: {error_msg}")
+    
+    try:
+        from ui_main import PYQT_AVAILABLE
+        if PYQT_AVAILABLE:
+            from PyQt6.QtWidgets import QMessageBox
+            from PyQt6.QtCore import QApplication
+            app = QApplication.instance()
+            if app:
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Icon.Critical)
+                msg.setWindowTitle("程序发生错误")
+                msg.setText(error_msg)
+                msg.exec()
+        else:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("程序发生错误", error_msg)
+            root.destroy()
+    except Exception:
+        pass
+    
+    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+
 def main():
     """
     主函数
     初始化日志、创建同步引擎和应用界面
     """
+    sys.excepthook = handle_exception
+    
     print("[DEBUG] 启动文件夹管理工具（Myfile）")
     logging.info("启动文件夹管理工具（Myfile）")
     
@@ -111,8 +144,18 @@ def main():
             logging.error(error_msg, exc_info=True)
             exit_code = 1
         
+        # 清理日志处理器
+        for handler in logging.root.handlers[:]:
+            try:
+                handler.flush()
+                handler.close()
+            except Exception:
+                pass
+        
         # 只有在GUI正常退出后才记录"程序正常退出"
         logging.info("程序正常退出")
+        sys.stdout.flush()
+        sys.stderr.flush()
         sys.exit(exit_code)
         
     except KeyboardInterrupt:

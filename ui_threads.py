@@ -571,6 +571,7 @@ class SyncThread(BaseThread):
         self.ignore_patterns = ignore_patterns
         self.last_log_length = 0
         self._running = False
+        self._window_valid = True
 
     def run(self) -> None:
         """运行同步任务或查找相同文件任务"""
@@ -608,6 +609,8 @@ class SyncThread(BaseThread):
                 self.ui._log_message(f"错误详情: {tb_str}", source=error_source)
 
         finally:
+            self._stop_progress_timer()
+            
             if self.task_type == "find_same" and self._running:
                 try:
                     if PYQT_AVAILABLE:
@@ -638,6 +641,7 @@ class SyncThread(BaseThread):
 
     def stop(self) -> None:
         """安全停止线程"""
+        self._stop_progress_timer()
         try:
             self._running = False
 
@@ -655,10 +659,62 @@ class SyncThread(BaseThread):
                             pass
         except Exception as e:
             pass
+    
+    def _start_progress_timer(self) -> None:
+        """启动进度更新定时器（仅用于非PyQt模式）"""
+        self._progress_timer_running = True
+        if not PYQT_AVAILABLE or QTimer is None:
+            import threading
+            self._progress_timer = threading.Thread(target=self._progress_loop, daemon=True)
+            self._progress_timer.start()
+    
+    def _progress_loop(self) -> None:
+        """进度更新循环（非PyQt模式）"""
+        import time
+        while self._progress_timer_running:
+            try:
+                self.update_progress()
+            except Exception:
+                pass
+            time.sleep(0.2)
+    
+    def _stop_progress_timer(self) -> None:
+        """停止进度更新定时器"""
+        self._progress_timer_running = False
+        self._window_valid = False
+        if PYQT_AVAILABLE and hasattr(self, '_progress_timer') and self._progress_timer:
+            try:
+                self._progress_timer.stop()
+                self._progress_timer.deleteLater()
+            except Exception:
+                pass
+        elif hasattr(self, '_progress_timer') and self._progress_timer and isinstance(self._progress_timer, threading.Thread):
+            self._progress_timer.join(timeout=1)
+    
+    def _update_progress_periodically(self) -> None:
+        """定期更新进度"""
+        try:
+            if not self._window_valid or not self._running:
+                return
+            if not hasattr(self, 'sync_engine') or not self.sync_engine:
+                return
+            progress = self.sync_engine.get_progress()
+            if hasattr(self, 'progress_updated'):
+                self.progress_updated.emit(progress)
+            
+            current_file = ""
+            if hasattr(self.sync_engine, '_current_file'):
+                current_file = self.sync_engine._current_file
+            if current_file and hasattr(self, 'current_file_updated'):
+                self.current_file_updated.emit(current_file)
+        except Exception:
+            pass
 
     def update_progress(self) -> None:
         """更新进度和日志"""
         try:
+            if not self._window_valid:
+                return
             if not hasattr(self, 'sync_engine') or not self.sync_engine or not self._running:
                 return
 
@@ -694,6 +750,8 @@ class SyncThread(BaseThread):
             pass
 
         try:
+            if not self._window_valid:
+                return
             if hasattr(self, 'sync_engine') and self.sync_engine:
                 logs = self.sync_engine.get_log()
                 if logs and len(logs) > self.last_log_length:

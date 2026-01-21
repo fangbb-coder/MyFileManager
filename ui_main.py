@@ -800,6 +800,7 @@ class SyncThread(BaseThread):
         self.ignore_patterns = ignore_patterns
         self.last_log_length = 0
         self._running = False
+        self._window_valid = True
     
     def run(self):
         """运行同步任务或查找相同文件任务"""
@@ -910,6 +911,7 @@ class SyncThread(BaseThread):
             # 标记为停止
             print("[DEBUG] 标记线程为停止状态")
             self._running = False
+            self._window_valid = False
             
             # 停止同步引擎
             if hasattr(self, 'sync_engine') and self.sync_engine:
@@ -946,6 +948,9 @@ class SyncThread(BaseThread):
     def update_progress(self):
         """更新进度和日志"""
         try:
+            if not self._window_valid:
+                return
+            
             if not hasattr(self, 'sync_engine') or not self.sync_engine or not self._running:
                 return
             
@@ -961,6 +966,7 @@ class SyncThread(BaseThread):
                     if hasattr(self, 'progress_updated'):
                         self.progress_updated.emit(progress)
                 except Exception as e:
+                    print(f"[DEBUG] 发送进度信号失败: {e}")
                     pass  # 忽略信号发送错误
                 
                 # 发送当前文件更新信号
@@ -968,6 +974,7 @@ class SyncThread(BaseThread):
                     try:
                         self.current_file_updated.emit(current_file)
                     except Exception as e:
+                        print(f"[DEBUG] 发送当前文件信号失败: {e}")
                         pass  # 忽略信号发送错误
             else:
                 # Tkinter模式回调
@@ -987,6 +994,8 @@ class SyncThread(BaseThread):
         
         # 更新日志 - 确保捕获所有新日志
         try:
+            if not self._window_valid:
+                return
             if hasattr(self, 'sync_engine') and self.sync_engine:
                 logs = self.sync_engine.get_log()
                 if logs and len(logs) > self.last_log_length:
@@ -1073,6 +1082,9 @@ class SyncApp(BaseObject):
         self.window = QMainWindow()
         self.window.setWindowTitle("文件夹管理工具 - Myfile")
         self.window.setMinimumSize(1200, 700)
+        
+        # 添加关闭事件处理
+        self.window.closeEvent = self._on_window_close
         
         # 自动比对定时器（用于手动输入路径时的防抖处理）
         self.auto_compare_timer = QTimer()
@@ -1691,14 +1703,24 @@ class SyncApp(BaseObject):
         # ===== 同步页面 - 进度条和日志区域（上下结构）=====
         sync_bottom_splitter = QSplitter(Qt.Orientation.Vertical)
         
-        # 进度条
+        # 进度区域
         sync_progress_widget = QWidget()
         sync_progress_layout = QVBoxLayout(sync_progress_widget)
+        sync_progress_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 进度条
         self.sync_progress_bar = QProgressBar()
         self.sync_progress_bar.setRange(0, 100)
         self.sync_progress_bar.setValue(0)
         self.sync_progress_bar.setTextVisible(True)
         sync_progress_layout.addWidget(self.sync_progress_bar)
+        
+        # 当前处理文件标签
+        self.sync_current_file_label = QLabel("等待开始...")
+        self.sync_current_file_label.setStyleSheet("color: #666666; font-size: 12px;")
+        self.sync_current_file_label.setWordWrap(True)
+        sync_progress_layout.addWidget(self.sync_current_file_label)
+        
         sync_bottom_splitter.addWidget(sync_progress_widget)
         
         # 日志显示区域
@@ -2727,15 +2749,21 @@ class SyncApp(BaseObject):
         )
         
         if PYQT_AVAILABLE:
+            # 不设置 progress_callback，完全使用信号槽机制代替
+            # 不设置 log_callback，使用信号槽机制代替
+            
             # 连接信号
             self.sync_thread.progress_updated.connect(lambda value: self.sync_progress_bar.setValue(value))
             self.sync_thread.log_updated.connect(self._log_message)
             self.sync_thread.sync_completed.connect(self._sync_completed)
+            self.sync_thread.current_file_updated.connect(lambda f: self.sync_current_file_label.setText(f"当前: {f}") if hasattr(self, 'sync_current_file_label') and f else None)
             
             # 启动线程
             self.sync_thread.start()
         else:
             # 设置回调
+            self.sync_engine.set_progress_callback(self._on_sync_progress)
+            self.sync_engine.set_log_callback(self._log_message)
             self.sync_thread.progress_callback = self._update_progress
             self.sync_thread.log_callback = self._log_message
             self.sync_thread.completed_callback = self._sync_completed
@@ -4148,8 +4176,30 @@ class SyncApp(BaseObject):
         # 重置按钮状态
         self._set_buttons_state(True)
     
+    def _on_sync_progress(self, progress: int, current_file: str = ""):
+        """同步进度回调"""
+        try:
+            if PYQT_AVAILABLE:
+                # 检查窗口是否仍然有效
+                if not hasattr(self, 'window') or self.window is None:
+                    return
+                if not self.window.isVisible():
+                    return
+                
+                # 更新进度条
+                self.sync_progress_bar.setValue(progress)
+                
+                # 更新当前文件显示
+                if hasattr(self, 'sync_current_file_label') and current_file:
+                    self.sync_current_file_label.setText(f"当前: {current_file}")
+        except Exception as e:
+            print(f"[DEBUG] _on_sync_progress 异常: {e}")
+            pass
+    
     def _sync_completed(self, success):
         """同步或查找完成处理"""
+        print(f"[DEBUG] _sync_completed 开始执行, success={success}")
+        
         # 重置运行状态
         self.running = False
         
@@ -4168,42 +4218,63 @@ class SyncApp(BaseObject):
                     if hasattr(self, 'only_show_diff_files'):
                         self.only_show_diff_files.setChecked(True)
                     # 刷新差异显示
+                    print("[DEBUG] _sync_completed 准备刷新差异显示")
                     self._auto_compare_if_ready(force=True)
+                    print("[DEBUG] _sync_completed 差异显示刷新完成")
         else:
             self._set_status("操作失败")
         
+        print("[DEBUG] _sync_completed 更新进度条")
         # 重置进度条
         if PYQT_AVAILABLE:
             self.sync_progress_bar.setValue(0)
             self.find_same_progress_bar.setValue(0)
+            if hasattr(self, 'sync_current_file_label'):
+                self.sync_current_file_label.setText("等待开始...")
         else:
             self._update_progress(0)
         
+        print("[DEBUG] _sync_completed 调用清理资源")
         # 安全清理线程资源
         self._cleanup_thread_resources()
+        print("[DEBUG] _sync_completed 执行完成")
+        
+    def _on_window_close(self, event):
+        """窗口关闭事件处理"""
+        print("[DEBUG] _on_window_close 开始执行")
+        self._cleanup_thread_resources()
+        print("[DEBUG] _on_window_close 清理完成，准备接受事件")
+        event.accept()
+        print("[DEBUG] _on_window_close 事件已接受")
         
     def _cleanup_thread_resources(self):
         """安全清理线程资源"""
+        print("[DEBUG] _cleanup_thread_resources 开始执行")
         
         thread_attributes = ['sync_thread', 'same_files_thread', 'duplicate_finder_thread', 'file_slimming_thread']
         
         try:
             for attr_name in thread_attributes:
-                
+                print(f"[DEBUG] 检查线程: {attr_name}")
                 
                 # 检查线程是否存在
                 if hasattr(self, attr_name) and getattr(self, attr_name) is not None:
                     thread = getattr(self, attr_name)
+                    print(f"[DEBUG] 找到线程 {attr_name}，设置窗口无效")
                     
+                    # 先设置窗口无效，停止进度更新
+                    if hasattr(thread, '_window_valid'):
+                        thread._window_valid = False
                     
                     # 先尝试安全停止线程
                     if hasattr(thread, 'stop'):
                         try:
-                            
+                            print(f"[DEBUG] 调用线程 {attr_name} 的 stop 方法")
                             thread.stop()
-                        
+                            print(f"[DEBUG] 线程 {attr_name} stop 完成")
                         except Exception as e:
                             error_msg = f"停止线程 {attr_name} 时出错: {str(e)}"
+                            print(f"[DEBUG] {error_msg}")
                     
                     # 断开所有信号连接
                     signals_to_disconnect = ['progress_updated', 'log_updated', 'sync_completed', 
@@ -4215,15 +4286,17 @@ class SyncApp(BaseObject):
                             if hasattr(thread, signal_name):
                                 signal = getattr(thread, signal_name)
                                 if hasattr(signal, 'disconnect'):
+                                    print(f"[DEBUG] 断开信号: {signal_name}")
                                     signal.disconnect()
-                        
                         except Exception as e:
                             error_msg = f"断开信号 {signal_name} 时出错: {str(e)}"
+                            print(f"[DEBUG] {error_msg}")
                     
                     # 等待线程完全终止
                     if hasattr(thread, 'wait') and hasattr(thread, 'isRunning'):
                         try:
                             if thread.isRunning():
+                                print(f"[DEBUG] 等待线程 {attr_name} 终止...")
                                 # 分多次等待，增加超时处理
                                 wait_time = 500
                                 total_wait = 0
@@ -4233,36 +4306,59 @@ class SyncApp(BaseObject):
                                     thread.wait(wait_time)
                                     total_wait += wait_time
                                 
+                                print(f"[DEBUG] 线程 {attr_name} 等待完成，isRunning={thread.isRunning()}")
+                                
                                 # 如果线程仍在运行，尝试强制终止
                                 if hasattr(thread, 'terminate') and thread.isRunning():
                                     try:
+                                        print(f"[DEBUG] 强制终止线程 {attr_name}")
                                         thread.terminate()
                                         
                                         # 再等待一下确保终止
                                         thread.wait(1000)
+                                        print(f"[DEBUG] 强制终止完成，isRunning={thread.isRunning()}")
                                     except Exception as e:
                                         error_msg = f"强制终止线程 {attr_name} 时出错: {str(e)}"
+                                        print(f"[DEBUG] {error_msg}")
                         
                         except Exception as e:
                             error_msg = f"等待线程 {attr_name} 完成时出错: {str(e)}"
+                            print(f"[DEBUG] {error_msg}")
                     
                     # 清理线程引用，让垃圾回收可以回收
+                    print(f"[DEBUG] 清理线程 {attr_name} 引用")
                     setattr(self, attr_name, None)
+                else:
+                    print(f"[DEBUG] 线程 {attr_name} 不存在或为 None")
         
         except Exception as e:
             import traceback
             error_msg = f"线程资源清理过程异常: {str(e)}"
+            print(f"[DEBUG] {error_msg}")
+            print(f"[DEBUG] 异常堆栈:\n{traceback.format_exc()}")
             self._log_message(error_msg, source="sync")
             self._log_message(f"异常堆栈:\n{traceback.format_exc()}", source="sync")
+        
+        print("[DEBUG] _cleanup_thread_resources 执行完成")
     
     def _update_progress(self, value):
         """更新进度条"""
-        if PYQT_AVAILABLE:
-            self.progress_bar.setValue(value)
-            # 同时更新相同文件比对页面的进度条
-            self.find_same_progress_bar.setValue(value)
-        else:
-            self.progress_var.set(value)
+        try:
+            if PYQT_AVAILABLE:
+                # 检查窗口是否仍然有效
+                if not hasattr(self, 'window') or self.window is None:
+                    return
+                if not self.window.isVisible():
+                    return
+                
+                self.progress_bar.setValue(value)
+                # 同时更新相同文件比对页面的进度条
+                self.find_same_progress_bar.setValue(value)
+            else:
+                self.progress_var.set(value)
+        except Exception as e:
+            print(f"[DEBUG] _update_progress 异常: {e}")
+            pass
     
     def _log_message(self, message, source="sync"):
         """记录日志消息
@@ -4271,23 +4367,33 @@ class SyncApp(BaseObject):
             message: 日志消息内容
             source: 日志来源，"sync"表示同步日志，"find_same"表示相同文件比对日志
         """
-        if PYQT_AVAILABLE:
-            # 根据来源选择不同的日志组件
-            if source == "find_same" and hasattr(self, 'find_same_log_text'):
-                self.find_same_log_text.append(message)
-                # 自动滚动到底部
-                self.find_same_log_text.moveCursor(QTextCursor.MoveOperation.End)
+        try:
+            if PYQT_AVAILABLE:
+                # 检查窗口是否仍然有效
+                if not hasattr(self, 'window') or self.window is None:
+                    return
+                if not self.window.isVisible():
+                    return
+                
+                # 根据来源选择不同的日志组件
+                if source == "find_same" and hasattr(self, 'find_same_log_text'):
+                    self.find_same_log_text.append(message)
+                    # 自动滚动到底部
+                    self.find_same_log_text.moveCursor(QTextCursor.MoveOperation.End)
+                else:
+                    # 默认使用同步日志
+                    self.sync_log_text.append(message)
+                    # 自动滚动到底部
+                    self.sync_log_text.moveCursor(QTextCursor.MoveOperation.End)
             else:
-                # 默认使用同步日志
-                self.sync_log_text.append(message)
-                # 自动滚动到底部
-                self.sync_log_text.moveCursor(QTextCursor.MoveOperation.End)
-        else:
-            # Tkinter界面暂时只支持默认日志
-            self.log_text.config(state=tk.NORMAL)
-            self.log_text.insert(tk.END, message + "\n")
-            self.log_text.see(tk.END)
-            self.log_text.config(state=tk.DISABLED)
+                # Tkinter界面暂时只支持默认日志
+                self.log_text.config(state=tk.NORMAL)
+                self.log_text.insert(tk.END, message + "\n")
+                self.log_text.see(tk.END)
+                self.log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            print(f"[DEBUG] _log_message 异常: {e}")
+            pass
     
     def _clear_log(self):
         """清空日志"""
@@ -4310,10 +4416,20 @@ class SyncApp(BaseObject):
     
     def _set_status(self, status):
         """设置状态栏文本"""
-        if PYQT_AVAILABLE:
-            self.status_bar.showMessage(status)
-        else:
-            self.status_var.set(status)
+        try:
+            if PYQT_AVAILABLE:
+                # 检查窗口是否仍然有效
+                if not hasattr(self, 'window') or self.window is None:
+                    return
+                if not self.window.isVisible():
+                    return
+                
+                self.status_bar.showMessage(status)
+            else:
+                self.status_var.set(status)
+        except Exception as e:
+            print(f"[DEBUG] _set_status 异常: {e}")
+            pass
     
     def _set_buttons_state(self, enabled):
         """设置按钮状态"""
@@ -6789,13 +6905,14 @@ class SyncApp(BaseObject):
                 
                 # 设置应用程序退出前的清理操作
                 def cleanup_on_exit():
-                    
+                    print("[DEBUG] cleanup_on_exit 开始执行")
                     # 确保清理线程资源
                     self._cleanup_thread_resources()
-                    
+                    print("[DEBUG] cleanup_on_exit 执行完成")
                 
                 # 连接关闭信号
                 if hasattr(self.app, 'aboutToQuit'):
+                    print("[DEBUG] 连接 aboutToQuit 信号")
                     self.app.aboutToQuit.connect(cleanup_on_exit)
                 
                 # 运行应用程序事件循环
@@ -6805,6 +6922,7 @@ class SyncApp(BaseObject):
                     result = self.app.exec()
                     print(f"app.exec() returned with code: {result}")
                     # 显式调用清理函数
+                    print("[DEBUG] app.exec() 返回，调用 cleanup_on_exit")
                     cleanup_on_exit()
                     print("GUI已正常退出")
                     return result

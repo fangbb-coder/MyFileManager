@@ -86,25 +86,43 @@ def copy_file(source_path: str, dest_path: str, overwrite: bool = True) -> bool:
             logging.error(f"源文件不存在: {source_path}")
             return False
         
+        # 检查路径长度（Windows 限制 260 字符）
+        if len(dest_path) > 250:
+            logging.error(f"目标路径过长 ({len(dest_path)} 字符): {dest_path[:100]}...")
+            return False
+        
         # 确保目标目录存在
         dest_dir = os.path.dirname(dest_path)
-        if dest_dir:  # 避免空字符串
-            os.makedirs(dest_dir, exist_ok=True)
+        if dest_dir:
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except Exception as e:
+                logging.error(f"创建目标目录失败: {dest_dir}: {str(e)}")
+                return False
         
         # 检查目标文件是否存在
         if os.path.exists(dest_path) and not overwrite:
             logging.warning(f"目标文件已存在，不覆盖: {dest_path}")
             return False
         
+        # 如果目标文件存在且需要覆盖，先删除
+        if os.path.exists(dest_path) and overwrite:
+            try:
+                os.remove(dest_path)
+            except Exception as e:
+                logging.error(f"删除旧目标文件失败: {dest_path}: {str(e)}")
+                return False
+        
         # 复制文件
-        shutil.copy2(source_path, dest_path)
-        logging.info(f"文件复制成功: {source_path} -> {dest_path}")
-        return True
-    except PermissionError as e:
-        logging.error(f"文件复制失败（权限不足） {source_path} -> {dest_path}: {str(e)}")
-        return False
+        try:
+            shutil.copy2(source_path, dest_path)
+            logging.info(f"文件复制成功: {source_path} -> {dest_path}")
+            return True
+        except Exception as e:
+            logging.error(f"文件复制失败 {source_path} -> {dest_path}: {str(e)}")
+            return False
     except Exception as e:
-        logging.error(f"文件复制失败 {source_path} -> {dest_path}: {str(e)}")
+        logging.error(f"文件复制异常 {source_path} -> {dest_path}: {str(e)}")
         return False
 
 
