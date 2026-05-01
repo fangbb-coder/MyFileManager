@@ -5,6 +5,8 @@
 用于文件夹管理工具（Myfile）
 """
 
+from __future__ import annotations
+
 from typing import Optional, List, Dict, Any, Callable
 import os
 import logging
@@ -40,20 +42,22 @@ class UIStyles:
     LOG_HEIGHT = 200
 
     BUTTON_STYLE = """
-        QPushButton { 
-            border-radius: 3px; 
-            padding: 5px 0px; 
-            margin: 0px; 
+        QPushButton {
+            border-radius: 3px;
+            padding: 5px 0px;
+            margin: 0px;
             min-height: 35px;
             max-height: 35px;
             height: 35px;
         }
     """
 
-    LOG_BACKGROUND_COLOR = QColor(245, 245, 245)
-    LOG_TEXT_COLOR = QColor(0, 0, 0)
+    # 颜色常量 - 使用RGB值元组而非QColor对象，以便在非PyQt环境下也能访问
+    LOG_BACKGROUND_COLOR = (245, 245, 245)
+    LOG_TEXT_COLOR = (0, 0, 0)
 
     HELP_LABEL_STYLE = "color: #666; font-style: italic;"
+    CURRENT_FILE_LABEL_STYLE = "color: #666666; font-size: 12px;"
 
     LOG_FONT_FAMILY = "Consolas"
     LOG_FONT_SIZE = 9
@@ -76,18 +80,18 @@ class UIUtils:
     """UI工具类"""
 
     @staticmethod
-    def get_log_palette() -> Optional[QPalette]:
+    def get_log_palette() -> Optional[Any]:
         """
         获取日志区域的调色板
 
         Returns:
-            Optional[QPalette]: 日志调色板，如果PyQt不可用则返回None
+            Optional[Any]: 日志调色板，如果PyQt不可用则返回None
         """
         if not PYQT_AVAILABLE:
             return None
         palette = QPalette()
-        palette.setColor(QPalette.ColorRole.Base, UIStyles.LOG_BACKGROUND_COLOR)
-        palette.setColor(QPalette.ColorRole.Text, UIStyles.LOG_TEXT_COLOR)
+        palette.setColor(QPalette.ColorRole.Base, QColor(*UIStyles.LOG_BACKGROUND_COLOR))
+        palette.setColor(QPalette.ColorRole.Text, QColor(*UIStyles.LOG_TEXT_COLOR))
         return palette
 
     @staticmethod
@@ -437,33 +441,41 @@ class UIUtils:
         return folder if folder else None
 
 
-class FileTableWidgetItem(QTableWidgetItem):
-    """文件表格项，支持按大小和日期排序"""
+if PYQT_AVAILABLE:
+    class FileTableWidgetItem(QTableWidgetItem):
+        """文件表格项，支持按大小和日期排序"""
 
-    def __init__(self, text: str, file_size: int = 0, file_time: float = 0):
-        """
-        初始化文件表格项
+        def __init__(self, text: str, file_size: int = 0, file_time: float = 0):
+            """
+            初始化文件表格项
 
-        Args:
-            text: 显示文本
-            file_size: 文件大小（用于排序）
-            file_time: 文件时间（用于排序）
-        """
-        super().__init__(text)
-        self.file_size = file_size
-        self.file_time = file_time
-        self.setData(QtQt.ItemDataRole.UserRole, file_size)
+            Args:
+                text: 显示文本
+                file_size: 文件大小（用于排序）
+                file_time: 文件时间（用于排序）
+            """
+            super().__init__(text)
+            self.file_size = file_size
+            self.file_time = file_time
+            self.setData(QtQt.ItemDataRole.UserRole, file_size)
 
-    def __lt__(self, other: 'FileTableWidgetItem') -> bool:
-        """
-        比较运算符，用于排序
+        def __lt__(self, other: 'FileTableWidgetItem') -> bool:
+            """
+            比较运算符，用于排序
 
-        Args:
-            other: 另一个表格项
+            Args:
+                other: 另一个表格项
 
-        Returns:
-            bool: 是否小于
-        """
-        if hasattr(other, 'file_size'):
-            return self.file_size < other.file_size
-        return self.text() < other.text()
+            Returns:
+                bool: 是否小于
+            """
+            if hasattr(other, 'file_size'):
+                return self.file_size < other.file_size
+            return self.text() < other.text()
+else:
+    class FileTableWidgetItem:
+        """占位符类，当PyQt6不可用时"""
+        def __init__(self, text: str = "", file_size: int = 0, file_time: float = 0):
+            self.file_size = file_size
+            self.file_time = file_time
+            self._text = text

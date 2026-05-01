@@ -20,7 +20,7 @@ from ui_sync import SyncUI
 from ui_find_same import FindSameUI
 from ui_find_duplicate import DuplicateFinderUI
 from ui_file_slimming import FileSlimmingUI
-from ui_threads import FileSlimmingThread, DuplicateFinderThread, CopyFilesThread, SyncThread
+from ui_threads import FileSlimmingThread, DuplicateFinderThread, CopyFilesThread, SyncThread, FolderSizeThread
 from config_manager import ConfigManager
 
 # 尝试导入 PyQt6，如果失败则尝试 Tkinter
@@ -114,7 +114,7 @@ except ImportError as e:
     print(f"PyQt6 导入失败: {str(e)}")
     try:
         import tkinter as tk
-        from tkinter import ttk, filedialog, scrolledtext
+        from tkinter import ttk, filedialog, scrolledtext, messagebox
         print("Tkinter 导入成功")
     except ImportError:
         print("Tkinter 也未安装，请安装 PyQt6 或 Tkinter")
@@ -2143,10 +2143,14 @@ class SyncApp(BaseObject):
         sync_radio = ttk.Radiobutton(task_frame, text="文件同步", variable=self.task_type_var, value="sync", command=self._on_task_type_changed)
         same_files_radio = ttk.Radiobutton(task_frame, text="相同文件比对", variable=self.task_type_var, value="find_same", command=self._on_task_type_changed)
         duplicate_radio = ttk.Radiobutton(task_frame, text="重复文件查找", variable=self.task_type_var, value="find_duplicate", command=self._on_task_type_changed)
+        file_slimming_radio = ttk.Radiobutton(task_frame, text="文件夹搜身", variable=self.task_type_var, value="file_slimming", command=self._on_task_type_changed)
+        folder_size_radio = ttk.Radiobutton(task_frame, text="文件夹大小", variable=self.task_type_var, value="folder_size", command=self._on_task_type_changed)
         
         sync_radio.pack(side=tk.LEFT, padx=10)
         same_files_radio.pack(side=tk.LEFT, padx=10)
         duplicate_radio.pack(side=tk.LEFT, padx=10)
+        file_slimming_radio.pack(side=tk.LEFT, padx=10)
+        folder_size_radio.pack(side=tk.LEFT, padx=10)
         
         # ===== 重复文件查找页面 - Tkinter版 =====
         self.duplicate_frame = ttk.LabelFrame(main_frame, text="重复文件查找", padding="5")
@@ -2309,47 +2313,47 @@ class SyncApp(BaseObject):
         self.target_tree.pack(fill=tk.BOTH, expand=True)
         
         # ===== 同步选项区域 =====
-        options_frame = ttk.LabelFrame(main_frame, text="同步选项", padding="5")
-        options_frame.pack(fill=tk.X, pady=5)
+        self.sync_options_frame = ttk.LabelFrame(main_frame, text="同步选项", padding="5")
+        self.sync_options_frame.pack(fill=tk.X, pady=5)
         
         # 同步模式
-        ttk.Label(options_frame, text="同步模式:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Label(self.sync_options_frame, text="同步模式:").grid(row=0, column=0, sticky=tk.W, pady=2)
         
         self.sync_mode_var = tk.StringVar(value="A → B (单向)")
-        self.sync_mode_combo = ttk.Combobox(options_frame, textvariable=self.sync_mode_var)
+        self.sync_mode_combo = ttk.Combobox(self.sync_options_frame, textvariable=self.sync_mode_var)
         self.sync_mode_combo['values'] = ["A → B (单向)", "B → A (单向)", "A ↔ B (双向)"]
         self.sync_mode_combo.grid(row=0, column=1, sticky=tk.W, pady=2)
         
         # 忽略规则
-        ttk.Label(options_frame, text="忽略规则:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(self.sync_options_frame, text="忽略规则:").grid(row=1, column=0, sticky=tk.W, pady=2)
         
         self.ignore_var = tk.StringVar()
-        self.ignore_edit = ttk.Entry(options_frame, textvariable=self.ignore_var, width=50)
+        self.ignore_edit = ttk.Entry(self.sync_options_frame, textvariable=self.ignore_var, width=50)
         self.ignore_edit.insert(0, "例如: *.tmp, *.bak")
         self.ignore_edit.grid(row=1, column=1, sticky=tk.EW, pady=2)
         
         # 同步删除选项
         self.sync_delete_var = tk.BooleanVar()
-        self.sync_delete_check = ttk.Checkbutton(options_frame, text="同步删除（删除目标中多余的文件）", 
+        self.sync_delete_check = ttk.Checkbutton(self.sync_options_frame, text="同步删除（删除目标中多余的文件）", 
                                                variable=self.sync_delete_var)
         self.sync_delete_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
         
-        options_frame.columnconfigure(1, weight=1)
+        self.sync_options_frame.columnconfigure(1, weight=1)
         
         # ===== 按钮区域 =====
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.pack(fill=tk.X, pady=5)
+        self.buttons_frame = ttk.Frame(main_frame)
+        self.buttons_frame.pack(fill=tk.X, pady=5)
         
-        self.start_btn = ttk.Button(buttons_frame, text="开始同步", command=self._start_sync)
+        self.start_btn = ttk.Button(self.buttons_frame, text="开始同步", command=self._start_sync)
         self.start_btn.pack(side=tk.LEFT, padx=5)
         
-        self.find_same_files_btn = ttk.Button(buttons_frame, text="查找相同文件", command=self._find_same_files, state=tk.DISABLED)
+        self.find_same_files_btn = ttk.Button(self.buttons_frame, text="查找相同文件", command=self._find_same_files, state=tk.DISABLED)
         self.find_same_files_btn.pack(side=tk.LEFT, padx=5)
         
-        self.pause_btn = ttk.Button(buttons_frame, text="暂停", command=self._pause_sync, state=tk.DISABLED)
+        self.pause_btn = ttk.Button(self.buttons_frame, text="暂停", command=self._pause_sync, state=tk.DISABLED)
         self.pause_btn.pack(side=tk.LEFT, padx=5)
         
-        self.stop_btn = ttk.Button(buttons_frame, text="停止", command=self._stop_sync, state=tk.DISABLED)
+        self.stop_btn = ttk.Button(self.buttons_frame, text="停止", command=self._stop_sync, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
         # ===== 进度条 =====
@@ -2392,6 +2396,119 @@ class SyncApp(BaseObject):
         
         # 默认隐藏相同文件区域
         self.same_files_frame.pack_forget()
+        
+        # ===== 文件夹搜身页面 - Tkinter版 =====
+        self.file_slimming_frame = ttk.LabelFrame(main_frame, text="文件夹搜身", padding="5")
+        self.file_slimming_frame.pack_forget()
+        
+        tk_slimming_folder_frame = ttk.Frame(self.file_slimming_frame)
+        tk_slimming_folder_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(tk_slimming_folder_frame, text="目标文件夹:").pack(side=tk.LEFT, padx=5)
+        self.tk_file_slimming_folder_var = tk.StringVar()
+        ttk.Entry(tk_slimming_folder_frame, textvariable=self.tk_file_slimming_folder_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(tk_slimming_folder_frame, text="浏览...", command=self._tk_browse_file_slimming_folder).pack(side=tk.LEFT, padx=5)
+        
+        tk_slimming_scan_frame = ttk.Frame(self.file_slimming_frame)
+        tk_slimming_scan_frame.pack(fill=tk.X, pady=5)
+        self.tk_start_file_slimming_btn = ttk.Button(tk_slimming_scan_frame, text="开始扫描大文件", command=self._tk_start_file_slimming)
+        self.tk_start_file_slimming_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_pause_file_slimming_btn = ttk.Button(tk_slimming_scan_frame, text="暂停", command=self._tk_toggle_pause_file_slimming, state=tk.DISABLED)
+        self.tk_pause_file_slimming_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_stop_file_slimming_btn = ttk.Button(tk_slimming_scan_frame, text="停止", command=self._tk_stop_file_slimming, state=tk.DISABLED)
+        self.tk_stop_file_slimming_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.tk_file_slimming_progress_var = tk.DoubleVar()
+        ttk.Progressbar(self.file_slimming_frame, variable=self.tk_file_slimming_progress_var, maximum=100).pack(fill=tk.X, pady=5)
+        
+        self.tk_file_slimming_current_var = tk.StringVar(value="准备就绪")
+        ttk.Label(self.file_slimming_frame, textvariable=self.tk_file_slimming_current_var).pack(anchor=tk.W, padx=5, pady=2)
+        
+        tk_slimming_list_frame = ttk.LabelFrame(self.file_slimming_frame, text="文件列表（按大小排序）", padding="5")
+        tk_slimming_list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        tk_slimming_columns = ("name", "path", "size", "modified")
+        self.tk_file_slimming_tree = ttk.Treeview(tk_slimming_list_frame, columns=tk_slimming_columns, show="headings")
+        self.tk_file_slimming_tree.heading("name", text="文件名")
+        self.tk_file_slimming_tree.heading("path", text="文件路径")
+        self.tk_file_slimming_tree.heading("size", text="文件大小")
+        self.tk_file_slimming_tree.heading("modified", text="修改时间")
+        self.tk_file_slimming_tree.column("name", width=150, anchor=tk.W)
+        self.tk_file_slimming_tree.column("path", width=350, anchor=tk.W)
+        self.tk_file_slimming_tree.column("size", width=100, anchor=tk.E)
+        self.tk_file_slimming_tree.column("modified", width=150, anchor=tk.CENTER)
+        tk_slimming_scroll = ttk.Scrollbar(tk_slimming_list_frame, orient=tk.VERTICAL, command=self.tk_file_slimming_tree.yview)
+        self.tk_file_slimming_tree.configure(yscroll=tk_slimming_scroll.set)
+        tk_slimming_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tk_file_slimming_tree.pack(fill=tk.BOTH, expand=True)
+        
+        tk_slimming_ops_frame = ttk.Frame(self.file_slimming_frame)
+        tk_slimming_ops_frame.pack(fill=tk.X, pady=5)
+        self.tk_copy_files_btn = ttk.Button(tk_slimming_ops_frame, text="复制所选文件", command=lambda: self._tk_process_selected_files("copy"), state=tk.DISABLED)
+        self.tk_copy_files_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_move_files_btn = ttk.Button(tk_slimming_ops_frame, text="移动所选文件", command=lambda: self._tk_process_selected_files("move"), state=tk.DISABLED)
+        self.tk_move_files_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_delete_files_btn = ttk.Button(tk_slimming_ops_frame, text="删除所选文件", command=self._tk_delete_selected_files_from_slimming, state=tk.DISABLED)
+        self.tk_delete_files_btn.pack(side=tk.LEFT, padx=5)
+        
+        # ===== 文件夹大小页面 - Tkinter版 =====
+        self.folder_size_frame = ttk.LabelFrame(main_frame, text="文件夹大小", padding="5")
+        self.folder_size_frame.pack_forget()
+        
+        tk_fsize_folder_frame = ttk.Frame(self.folder_size_frame)
+        tk_fsize_folder_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(tk_fsize_folder_frame, text="目标文件夹:").pack(side=tk.LEFT, padx=5)
+        self.tk_folder_size_folder_var = tk.StringVar()
+        ttk.Entry(tk_fsize_folder_frame, textvariable=self.tk_folder_size_folder_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Button(tk_fsize_folder_frame, text="浏览...", command=self._tk_browse_folder_size_folder).pack(side=tk.LEFT, padx=5)
+        
+        tk_fsize_scan_frame = ttk.Frame(self.folder_size_frame)
+        tk_fsize_scan_frame.pack(fill=tk.X, pady=5)
+        self.tk_start_folder_size_btn = ttk.Button(tk_fsize_scan_frame, text="开始计算文件夹大小", command=self._tk_start_folder_size)
+        self.tk_start_folder_size_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_pause_folder_size_btn = ttk.Button(tk_fsize_scan_frame, text="暂停", command=self._tk_toggle_pause_folder_size, state=tk.DISABLED)
+        self.tk_pause_folder_size_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_stop_folder_size_btn = ttk.Button(tk_fsize_scan_frame, text="停止", command=self._tk_stop_folder_size, state=tk.DISABLED)
+        self.tk_stop_folder_size_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.tk_folder_size_progress_var = tk.DoubleVar()
+        ttk.Progressbar(self.folder_size_frame, variable=self.tk_folder_size_progress_var, maximum=100).pack(fill=tk.X, pady=5)
+        
+        self.tk_folder_size_current_var = tk.StringVar(value="准备就绪")
+        ttk.Label(self.folder_size_frame, textvariable=self.tk_folder_size_current_var).pack(anchor=tk.W, padx=5, pady=2)
+        
+        tk_fsize_list_frame = ttk.LabelFrame(self.folder_size_frame, text="文件夹列表（按大小排序）", padding="5")
+        tk_fsize_list_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        tk_fsize_columns = ("name", "path", "size", "count", "modified")
+        self.tk_folder_size_tree = ttk.Treeview(tk_fsize_list_frame, columns=tk_fsize_columns, show="headings")
+        self.tk_folder_size_tree.heading("name", text="文件夹名称")
+        self.tk_folder_size_tree.heading("path", text="文件夹路径")
+        self.tk_folder_size_tree.heading("size", text="文件夹大小")
+        self.tk_folder_size_tree.heading("count", text="文件数量")
+        self.tk_folder_size_tree.heading("modified", text="修改时间")
+        self.tk_folder_size_tree.column("name", width=120, anchor=tk.W)
+        self.tk_folder_size_tree.column("path", width=300, anchor=tk.W)
+        self.tk_folder_size_tree.column("size", width=100, anchor=tk.E)
+        self.tk_folder_size_tree.column("count", width=80, anchor=tk.CENTER)
+        self.tk_folder_size_tree.column("modified", width=150, anchor=tk.CENTER)
+        tk_fsize_scroll = ttk.Scrollbar(tk_fsize_list_frame, orient=tk.VERTICAL, command=self.tk_folder_size_tree.yview)
+        self.tk_folder_size_tree.configure(yscroll=tk_fsize_scroll.set)
+        tk_fsize_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tk_folder_size_tree.pack(fill=tk.BOTH, expand=True)
+        
+        tk_fsize_ops_frame = ttk.Frame(self.folder_size_frame)
+        tk_fsize_ops_frame.pack(fill=tk.X, pady=5)
+        self.tk_copy_folders_btn = ttk.Button(tk_fsize_ops_frame, text="复制所选文件夹", command=lambda: self._tk_process_selected_folders("copy"), state=tk.DISABLED)
+        self.tk_copy_folders_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_move_folders_btn = ttk.Button(tk_fsize_ops_frame, text="移动所选文件夹", command=lambda: self._tk_process_selected_folders("move"), state=tk.DISABLED)
+        self.tk_move_folders_btn.pack(side=tk.LEFT, padx=5)
+        self.tk_delete_folders_btn = ttk.Button(tk_fsize_ops_frame, text="删除所选文件夹", command=self._tk_delete_selected_folders, state=tk.DISABLED)
+        self.tk_delete_folders_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.tk_file_slimming_thread = None
+        self.tk_file_slimming_files = []
+        self.is_tk_file_slimming_paused = False
+        self.tk_folder_size_thread = None
+        self.tk_folder_size_folders = []
+        self.is_tk_folder_size_paused = False
         
         # ===== 状态栏 =====
         self.status_var = tk.StringVar(value="就绪")
@@ -2674,11 +2791,15 @@ class SyncApp(BaseObject):
         """在Tkinter模式下任务类型变更时的处理"""
         task_type = self.task_type_var.get()
         
-        # 隐藏所有任务相关的控件
-        for widget in [self.sync_options_frame, self.buttons_frame, self.log_frame, self.same_files_frame, self.duplicate_frame]:
+        all_widgets = [
+            self.sync_options_frame, self.buttons_frame, self.log_frame,
+            self.same_files_frame, self.duplicate_frame,
+            self.file_slimming_frame, self.folder_size_frame
+        ]
+        for widget in all_widgets:
             widget.pack_forget()
+        self.progress_bar.pack_forget()
         
-        # 根据任务类型显示对应的控件
         if task_type == "sync":
             self.sync_options_frame.pack(fill=tk.X, pady=5)
             self.buttons_frame.pack(fill=tk.X, pady=5)
@@ -2686,16 +2807,340 @@ class SyncApp(BaseObject):
             self.log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
             self._set_status("文件同步模式就绪")
         elif task_type == "find_same":
-            self.buttons_frame.pack_forget()  # 隐藏同步相关的按钮
             self.same_files_frame.pack(fill=tk.BOTH, expand=True, pady=5)
             self.progress_bar.pack(fill=tk.X, pady=5)
-            self.log_frame.pack_forget()  # 隐藏日志框
+            self.log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
             self._set_status("相同文件比对模式就绪")
         elif task_type == "find_duplicate":
-            self.buttons_frame.pack_forget()  # 隐藏同步相关的按钮
             self.duplicate_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-            self.log_frame.pack_forget()  # 隐藏日志框
+            self.progress_bar.pack(fill=tk.X, pady=5)
             self._set_status("重复文件查找模式就绪")
+        elif task_type == "file_slimming":
+            self.file_slimming_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+            self._set_status("文件夹搜身模式就绪")
+        elif task_type == "folder_size":
+            self.folder_size_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+            self._set_status("文件夹大小模式就绪")
+    
+    # ===== Tkinter版文件夹搜身方法 =====
+    
+    def _tk_browse_file_slimming_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.tk_file_slimming_folder_var.set(folder)
+            self.tk_start_file_slimming_btn.config(state=tk.NORMAL)
+    
+    def _tk_start_file_slimming(self):
+        folder_path = self.tk_file_slimming_folder_var.get().strip()
+        if not folder_path or not os.path.isdir(folder_path):
+            messagebox.showwarning("警告", "请选择有效的目标文件夹")
+            return
+        self.tk_start_file_slimming_btn.config(state=tk.DISABLED)
+        self.tk_pause_file_slimming_btn.config(state=tk.NORMAL)
+        self.tk_stop_file_slimming_btn.config(state=tk.NORMAL)
+        for item in self.tk_file_slimming_tree.get_children():
+            self.tk_file_slimming_tree.delete(item)
+        self.tk_file_slimming_files = []
+        self.is_tk_file_slimming_paused = False
+        self.tk_pause_file_slimming_btn.config(text="暂停")
+        self._set_status("开始扫描大文件...")
+        self.tk_file_slimming_thread = FileSlimmingThread(folder_path)
+        self.tk_file_slimming_thread.progress_updated.connect(lambda p: self.root.after(0, lambda: self.tk_file_slimming_progress_var.set(p)))
+        self.tk_file_slimming_thread.current_file_updated.connect(lambda f: self.root.after(0, lambda: self.tk_file_slimming_current_var.set(f"当前文件: {f}")))
+        self.tk_file_slimming_thread.result_ready.connect(lambda d: self.root.after(0, lambda: self._tk_display_file_slimming_results(d)))
+        self.tk_file_slimming_thread.start()
+    
+    def _tk_toggle_pause_file_slimming(self):
+        if self.tk_file_slimming_thread is None:
+            return
+        if self.is_tk_file_slimming_paused:
+            if hasattr(self.tk_file_slimming_thread, 'resume'):
+                self.tk_file_slimming_thread.resume()
+            self.tk_pause_file_slimming_btn.config(text="暂停")
+            self._set_status("继续扫描大文件...")
+        else:
+            if hasattr(self.tk_file_slimming_thread, 'pause'):
+                self.tk_file_slimming_thread.pause()
+            self.tk_pause_file_slimming_btn.config(text="继续")
+            self._set_status("扫描大文件已暂停")
+        self.is_tk_file_slimming_paused = not self.is_tk_file_slimming_paused
+    
+    def _tk_stop_file_slimming(self):
+        if self.tk_file_slimming_thread:
+            if hasattr(self.tk_file_slimming_thread, 'stop'):
+                self.tk_file_slimming_thread.stop()
+            self.tk_file_slimming_thread = None
+        self._tk_reset_file_slimming_ui()
+        self._set_status("文件夹搜身已停止")
+    
+    def _tk_reset_file_slimming_ui(self):
+        self.tk_start_file_slimming_btn.config(state=tk.NORMAL)
+        self.tk_pause_file_slimming_btn.config(state=tk.DISABLED)
+        self.tk_stop_file_slimming_btn.config(state=tk.DISABLED)
+        self.is_tk_file_slimming_paused = False
+        self.tk_pause_file_slimming_btn.config(text="暂停")
+    
+    def _tk_display_file_slimming_results(self, files_data):
+        self.tk_file_slimming_files = files_data
+        for item in self.tk_file_slimming_tree.get_children():
+            self.tk_file_slimming_tree.delete(item)
+        if not files_data:
+            self._set_status("未找到文件")
+            self._tk_reset_file_slimming_ui()
+            return
+        for file_info in sorted(files_data, key=lambda x: x.get("size", 0), reverse=True):
+            self.tk_file_slimming_tree.insert("", tk.END, values=(
+                file_info.get("name", ""),
+                file_info.get("full_path", ""),
+                self._format_file_size(file_info.get("size", 0)),
+                file_info.get("modified", "")
+            ))
+        self._set_status(f"扫描完成: 找到 {len(files_data)} 个文件")
+        self._tk_reset_file_slimming_ui()
+        self.tk_copy_files_btn.config(state=tk.DISABLED)
+        self.tk_move_files_btn.config(state=tk.DISABLED)
+        self.tk_delete_files_btn.config(state=tk.DISABLED)
+        self.tk_file_slimming_tree.bind("<<TreeviewSelect>>", self._tk_on_file_slimming_selection_changed)
+    
+    def _tk_on_file_slimming_selection_changed(self, event=None):
+        has_selection = len(self.tk_file_slimming_tree.selection()) > 0
+        self.tk_copy_files_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        self.tk_move_files_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        self.tk_delete_files_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+    
+    def _tk_process_selected_files(self, operation_type):
+        selected_items = self.tk_file_slimming_tree.selection()
+        if not selected_items:
+            messagebox.showinfo("提示", "请先选择要处理的文件")
+            return
+        import shutil
+        target_folder = filedialog.askdirectory(title="选择目标文件夹")
+        if not target_folder:
+            return
+        success_count = 0
+        failed_count = 0
+        operation_name = "复制" if operation_type == "copy" else "移动"
+        for item_id in selected_items:
+            values = self.tk_file_slimming_tree.item(item_id, "values")
+            source_file = values[1]
+            filename = os.path.basename(source_file)
+            target_file = os.path.join(target_folder, filename)
+            if os.path.exists(target_file):
+                reply = messagebox.askyesnocancel("文件已存在", f"文件 {filename} 已存在，是否覆盖？")
+                if reply is None:
+                    break
+                elif not reply:
+                    failed_count += 1
+                    continue
+            try:
+                if operation_type == "copy":
+                    shutil.copy2(source_file, target_file)
+                else:
+                    shutil.move(source_file, target_file)
+                success_count += 1
+            except Exception as e:
+                self.logger.error(f"{operation_name}文件 {source_file} 失败: {e}")
+                failed_count += 1
+        self._set_status(f"{operation_name}完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+    
+    def _tk_delete_selected_files_from_slimming(self):
+        selected_items = self.tk_file_slimming_tree.selection()
+        if not selected_items:
+            messagebox.showinfo("提示", "请先选择要删除的文件")
+            return
+        reply = messagebox.askyesno("确认删除", f"确定要删除选中的 {len(selected_items)} 个文件吗？\n文件将被移动到回收站。")
+        if not reply:
+            return
+        deleted_count = 0
+        failed_count = 0
+        for item_id in selected_items:
+            values = self.tk_file_slimming_tree.item(item_id, "values")
+            file_path = os.path.normpath(values[1])
+            try:
+                if os.path.exists(file_path):
+                    try:
+                        from send2trash import send2trash
+                        send2trash(file_path)
+                    except ImportError:
+                        if sys.platform == "win32":
+                            subprocess.run(f'del /f /q "{file_path}"', shell=True)
+                        else:
+                            os.remove(file_path)
+                self.tk_file_slimming_tree.delete(item_id)
+                deleted_count += 1
+            except Exception as e:
+                self.logger.error(f"删除文件 {file_path} 失败: {e}")
+                failed_count += 1
+        self._set_status(f"删除完成: 成功 {deleted_count} 个, 失败 {failed_count} 个")
+    
+    # ===== Tkinter版文件夹大小方法 =====
+    
+    def _tk_browse_folder_size_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.tk_folder_size_folder_var.set(folder)
+            self.tk_start_folder_size_btn.config(state=tk.NORMAL)
+    
+    def _tk_start_folder_size(self):
+        folder = self.tk_folder_size_folder_var.get().strip()
+        if not folder:
+            messagebox.showwarning("警告", "请先选择文件夹")
+            return
+        if not os.path.exists(folder):
+            messagebox.showwarning("警告", "文件夹不存在")
+            return
+        for item in self.tk_folder_size_tree.get_children():
+            self.tk_folder_size_tree.delete(item)
+        self.tk_folder_size_folders = []
+        self.tk_folder_size_thread = FolderSizeThread(folder, self.sync_engine)
+        self.tk_folder_size_thread.progress_updated.connect(lambda p: self.root.after(0, lambda: self.tk_folder_size_progress_var.set(p)))
+        self.tk_folder_size_thread.current_folder_updated.connect(lambda f: self.root.after(0, lambda: self.tk_folder_size_current_var.set(f"当前文件夹: {f}")))
+        self.tk_folder_size_thread.result_ready.connect(lambda d: self.root.after(0, lambda: self._tk_display_folder_size_results(d)))
+        self.tk_folder_size_thread.log_updated.connect(lambda m: self.root.after(0, lambda: self._log_message(m, source="folder_size")))
+        self.tk_folder_size_thread.start()
+        self.tk_start_folder_size_btn.config(state=tk.DISABLED)
+        self.tk_pause_folder_size_btn.config(state=tk.NORMAL)
+        self.tk_stop_folder_size_btn.config(state=tk.NORMAL)
+        self.is_tk_folder_size_paused = False
+        self.tk_pause_folder_size_btn.config(text="暂停")
+        self.tk_copy_folders_btn.config(state=tk.DISABLED)
+        self.tk_move_folders_btn.config(state=tk.DISABLED)
+        self.tk_delete_folders_btn.config(state=tk.DISABLED)
+    
+    def _tk_toggle_pause_folder_size(self):
+        if self.tk_folder_size_thread is None:
+            return
+        if self.is_tk_folder_size_paused:
+            if hasattr(self.tk_folder_size_thread, 'resume'):
+                self.tk_folder_size_thread.resume()
+            self.is_tk_folder_size_paused = False
+            self.tk_pause_folder_size_btn.config(text="暂停")
+        else:
+            if hasattr(self.tk_folder_size_thread, 'pause'):
+                self.tk_folder_size_thread.pause()
+            self.is_tk_folder_size_paused = True
+            self.tk_pause_folder_size_btn.config(text="继续")
+    
+    def _tk_stop_folder_size(self):
+        if self.tk_folder_size_thread:
+            if hasattr(self.tk_folder_size_thread, 'stop'):
+                self.tk_folder_size_thread.stop()
+            self.tk_folder_size_thread = None
+        self._tk_reset_folder_size_ui()
+    
+    def _tk_reset_folder_size_ui(self):
+        self.tk_start_folder_size_btn.config(state=tk.NORMAL)
+        self.tk_pause_folder_size_btn.config(state=tk.DISABLED)
+        self.tk_stop_folder_size_btn.config(state=tk.DISABLED)
+        self.is_tk_folder_size_paused = False
+        self.tk_pause_folder_size_btn.config(text="暂停")
+    
+    def _tk_display_folder_size_results(self, folder_list):
+        self.tk_folder_size_folders = folder_list
+        for item in self.tk_folder_size_tree.get_children():
+            self.tk_folder_size_tree.delete(item)
+        if not folder_list:
+            self._set_status("未找到子文件夹")
+            self._tk_reset_folder_size_ui()
+            return
+        for folder_info in sorted(folder_list, key=lambda x: x.get("file_count", 0), reverse=True):
+            self.tk_folder_size_tree.insert("", tk.END, values=(
+                folder_info.get("name", ""),
+                folder_info.get("path", ""),
+                self._format_file_size(folder_info.get("size", 0)),
+                str(folder_info.get("file_count", 0)),
+                folder_info.get("modified", "")
+            ))
+        self._set_status(f"计算完成: 找到 {len(folder_list)} 个文件夹")
+        self._tk_reset_folder_size_ui()
+        if folder_list:
+            self.tk_copy_folders_btn.config(state=tk.NORMAL)
+            self.tk_move_folders_btn.config(state=tk.NORMAL)
+            self.tk_delete_folders_btn.config(state=tk.NORMAL)
+        self.tk_folder_size_tree.bind("<<TreeviewSelect>>", self._tk_on_folder_size_selection_changed)
+    
+    def _tk_on_folder_size_selection_changed(self, event=None):
+        has_selection = len(self.tk_folder_size_tree.selection()) > 0
+        self.tk_copy_folders_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        self.tk_move_folders_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        self.tk_delete_folders_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+    
+    def _tk_process_selected_folders(self, operation):
+        selected_items = self.tk_folder_size_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("警告", "请先选择文件夹")
+            return
+        selected_folders = []
+        for item_id in selected_items:
+            values = self.tk_folder_size_tree.item(item_id, "values")
+            selected_folders.append(values[1])
+        if not selected_folders:
+            return
+        target_dir = filedialog.askdirectory(title="选择目标文件夹")
+        if not target_dir:
+            return
+        success_count = 0
+        failed_count = 0
+        if operation == "copy":
+            for folder_path in selected_folders:
+                folder_name = os.path.basename(folder_path)
+                dest_path = os.path.join(target_dir, folder_name)
+                try:
+                    self._copy_directory(folder_path, dest_path)
+                    success_count += 1
+                    self._log_message(f"复制文件夹成功: {folder_path} -> {dest_path}", source="folder_size")
+                except Exception as e:
+                    failed_count += 1
+                    self._log_message(f"复制文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+            messagebox.showinfo("完成", f"复制完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+        elif operation == "move":
+            for folder_path in selected_folders:
+                folder_name = os.path.basename(folder_path)
+                dest_path = os.path.join(target_dir, folder_name)
+                copy_success = False
+                try:
+                    self._copy_directory(folder_path, dest_path)
+                    copy_success = True
+                    self._delete_directory(folder_path)
+                    success_count += 1
+                    self._log_message(f"移动文件夹成功: {folder_path} -> {dest_path}", source="folder_size")
+                except Exception as e:
+                    failed_count += 1
+                    self._log_message(f"移动文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+                    if not copy_success and os.path.exists(dest_path):
+                        try:
+                            self._delete_directory(dest_path)
+                        except Exception:
+                            pass
+            messagebox.showinfo("完成", f"移动完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+            self._tk_start_folder_size()
+    
+    def _tk_delete_selected_folders(self):
+        selected_items = self.tk_folder_size_tree.selection()
+        if not selected_items:
+            messagebox.showwarning("警告", "请先选择文件夹")
+            return
+        selected_folders = []
+        for item_id in selected_items:
+            values = self.tk_folder_size_tree.item(item_id, "values")
+            selected_folders.append(values[1])
+        if not selected_folders:
+            return
+        reply = messagebox.askyesno("确认删除", f"确定要删除选中的 {len(selected_folders)} 个文件夹吗？\n此操作不可恢复！")
+        if not reply:
+            return
+        success_count = 0
+        failed_count = 0
+        for folder_path in selected_folders:
+            try:
+                self._delete_directory(folder_path)
+                success_count += 1
+                self._log_message(f"删除文件夹成功: {folder_path}", source="folder_size")
+            except Exception as e:
+                failed_count += 1
+                self._log_message(f"删除文件夹失败: {folder_path}, 错误: {str(e)}", source="folder_size")
+        messagebox.showinfo("完成", f"删除完成: 成功 {success_count} 个, 失败 {failed_count} 个")
+        self._tk_start_folder_size()
     
     def _start_sync(self):
         """开始同步"""

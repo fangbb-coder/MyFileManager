@@ -5,6 +5,8 @@
 用于文件夹管理工具（Myfile）
 """
 
+from __future__ import annotations
+
 from typing import Optional, Any, List
 import os
 

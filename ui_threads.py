@@ -5,6 +5,8 @@
 用于文件夹管理工具（Myfile）
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import threading
@@ -33,13 +35,26 @@ except ImportError:
 
 
 class DummySignal:
-    """在非PyQt模式下使用的空信号类"""
+    """在非PyQt模式下使用的空信号类，支持回调"""
 
     def __init__(self, *args):
-        pass
+        self._callbacks = []
+
+    def connect(self, callback):
+        self._callbacks.append(callback)
+
+    def disconnect(self, callback=None):
+        if callback is None:
+            self._callbacks.clear()
+        elif callback in self._callbacks:
+            self._callbacks.remove(callback)
 
     def emit(self, *args):
-        pass
+        for cb in self._callbacks:
+            try:
+                cb(*args)
+            except Exception:
+                pass
 
 
 ConditionalSignal = pyqtSignal if PYQT_AVAILABLE else DummySignal
@@ -86,24 +101,16 @@ class FileSlimmingThread(BaseThread):
         self._pause_event.set()
 
     def _emit_log(self, message: str) -> None:
-        """发送日志信息"""
-        if PYQT_AVAILABLE:
-            self.log_updated.emit(message)
+        self.log_updated.emit(message)
 
     def _emit_progress(self, progress: int) -> None:
-        """发送进度更新"""
-        if PYQT_AVAILABLE:
-            self.progress_updated.emit(progress)
+        self.progress_updated.emit(progress)
 
     def _emit_current_file(self, file_path: str) -> None:
-        """发送当前处理的文件"""
-        if PYQT_AVAILABLE:
-            self.current_file_updated.emit(file_path)
+        self.current_file_updated.emit(file_path)
 
     def _emit_results(self, file_list: List[Dict[str, Any]]) -> None:
-        """发送扫描结果"""
-        if PYQT_AVAILABLE:
-            self.result_ready.emit(file_list)
+        self.result_ready.emit(file_list)
 
     def run(self) -> None:
         """执行文件扫描"""
@@ -215,24 +222,16 @@ class DuplicateFinderThread(BaseThread):
             self.wait()
 
     def _emit_log(self, message: str) -> None:
-        """发送日志信息"""
-        if PYQT_AVAILABLE:
-            self.log_updated.emit(message)
+        self.log_updated.emit(message)
 
     def _emit_progress(self, progress: int) -> None:
-        """发送进度更新"""
-        if PYQT_AVAILABLE:
-            self.progress_updated.emit(progress)
+        self.progress_updated.emit(progress)
 
     def _emit_current_file(self, file_path: str) -> None:
-        """发送当前处理的文件"""
-        if PYQT_AVAILABLE:
-            self.current_file_updated.emit(file_path)
+        self.current_file_updated.emit(file_path)
 
     def _emit_results(self, duplicate_groups: List[Dict[str, Any]]) -> None:
-        """发送扫描结果"""
-        if PYQT_AVAILABLE:
-            self.duplicate_files_found.emit(duplicate_groups)
+        self.duplicate_files_found.emit(duplicate_groups)
 
     def _file_hash(self, path: str, algo: str = "md5", chunk_size: int = 8192) -> Optional[str]:
         """计算文件哈希值"""
@@ -771,3 +770,139 @@ class SyncThread(BaseThread):
                     self.last_log_length = len(logs)
         except Exception as e:
             pass
+
+
+class FolderSizeThread(BaseThread):
+    """文件夹大小计算线程"""
+
+    progress_updated = ConditionalSignal(int)
+    log_updated = ConditionalSignal(str)
+    result_ready = ConditionalSignal(list)
+    current_folder_updated = ConditionalSignal(str)
+
+    def __init__(self, directory, sync_engine, ignore_patterns=None):
+        super().__init__()
+        self.directory = directory
+        self.sync_engine = sync_engine
+        self.ignore_patterns = ignore_patterns
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()
+
+    def stop(self):
+        """停止扫描"""
+        self._stop_event.set()
+        self._pause_event.set()
+        if PYQT_AVAILABLE:
+            self.wait()
+
+    def pause(self):
+        """暂停扫描"""
+        self._pause_event.clear()
+
+    def resume(self):
+        """恢复扫描"""
+        self._pause_event.set()
+
+    def _emit_log(self, message):
+        self.log_updated.emit(message)
+
+    def _emit_progress(self, progress):
+        self.progress_updated.emit(progress)
+
+    def _emit_current_folder(self, folder_path):
+        self.current_folder_updated.emit(folder_path)
+
+    def _emit_results(self, folder_list):
+        self.result_ready.emit(folder_list)
+
+    def run(self):
+        """执行文件夹大小计算"""
+        try:
+            self._emit_log(f"开始计算文件夹大小: {self.directory}")
+
+            if not os.path.exists(self.directory):
+                self._emit_log(f"目录不存在: {self.directory}")
+                self._emit_results([])
+                return
+
+            folder_sizes = []
+
+            # 只获取根目录的直接子文件夹
+            try:
+                entries = os.listdir(self.directory)
+            except PermissionError:
+                self._emit_log(f"无法访问目录: {self.directory}")
+                self._emit_results([])
+                return
+
+            subfolders = []
+            for entry in entries:
+                entry_path = os.path.join(self.directory, entry)
+                if os.path.isdir(entry_path):
+                    subfolders.append(entry_path)
+
+            total_folders = len(subfolders)
+            processed_folders = 0
+
+            # 计算每个子文件夹的大小
+            for folder_path in subfolders:
+                if self._stop_event.is_set():
+                    self._emit_log("计算已取消")
+                    return
+
+                self._pause_event.wait()
+                if self._stop_event.is_set():
+                    self._emit_log("计算已取消")
+                    return
+
+                self._emit_current_folder(folder_path)
+
+                # 计算文件夹总大小（包括所有子文件夹和文件）
+                folder_size = 0
+                file_count = 0
+
+                for root, dirs, files in os.walk(folder_path):
+                    if self._stop_event.is_set():
+                        break
+                    self._pause_event.wait()
+                    if self._stop_event.is_set():
+                        break
+
+                    for filename in files:
+                        file_path = os.path.join(root, filename)
+                        try:
+                            file_size = os.path.getsize(file_path)
+                            folder_size += file_size
+                            file_count += 1
+                        except (FileNotFoundError, PermissionError):
+                            pass
+
+                # 获取文件夹信息
+                folder_name = os.path.basename(folder_path)
+                folder_modified_time = os.path.getmtime(folder_path)
+
+                # 添加到列表
+                folder_sizes.append({
+                    "name": folder_name,
+                    "path": folder_path,
+                    "size": folder_size,
+                    "file_count": file_count,
+                    "modified_time": folder_modified_time,
+                    "modified": datetime.fromtimestamp(folder_modified_time).strftime('%Y-%m-%d %H:%M:%S')
+                })
+
+                # 更新进度
+                processed_folders += 1
+                progress = (processed_folders / total_folders) * 100 if total_folders > 0 else 0
+                self._emit_progress(int(progress))
+
+            # 按文件夹大小排序（从大到小）
+            folder_sizes.sort(key=lambda x: x["size"], reverse=True)
+
+            if not self._stop_event.is_set():
+                self._emit_log(f"计算完成，共找到 {len(folder_sizes)} 个子文件夹")
+                self._emit_results(folder_sizes)
+
+        except Exception as e:
+            self._emit_log(f"计算过程中发生错误: {str(e)}")

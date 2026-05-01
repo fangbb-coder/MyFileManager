@@ -9,10 +9,12 @@
 import sys
 import os
 import logging
+import types
 from logging.handlers import RotatingFileHandler
+from typing import Optional, Type
 
 # 非常早期的日志设置，不依赖utils模块
-def early_setup_logging():
+def early_setup_logging() -> None:
     """在导入其他模块前设置基本日志"""
     # 使用当前工作目录（用户运行程序的目录）作为日志目录
     # 这样用户可以在运行程序的地方找到日志文件
@@ -63,8 +65,18 @@ except ImportError as e:
     raise
 
 
-def handle_exception(exc_type, exc_value, exc_traceback):
-    """全局异常处理函数"""
+def handle_exception(
+    exc_type: Type[BaseException],
+    exc_value: BaseException,
+    exc_traceback: Optional[types.TracebackType]
+) -> None:
+    """全局异常处理函数
+
+    Args:
+        exc_type: 异常类型
+        exc_value: 异常实例
+        exc_traceback: 异常回溯信息
+    """
     import traceback
     error_msg = f"程序发生未处理的异常:\n\n{''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))}"
     logging.error(f"未处理的异常: {error_msg}")
@@ -94,10 +106,13 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 
-def main():
+def main() -> int:
     """
     主函数
     初始化日志、创建同步引擎和应用界面
+
+    Returns:
+        int: 程序退出代码，0表示正常退出
     """
     sys.excepthook = handle_exception
     

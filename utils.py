@@ -13,14 +13,14 @@ from datetime import datetime
 from typing import Optional, List
 
 
-def get_file_hash(file_path: str, block_size: int = 65536) -> Optional[str]:
+def get_file_hash(file_path: str, block_size: int = 1048576) -> Optional[str]:
     """
     计算文件的MD5哈希值，用于文件内容比较
-    
+
     Args:
         file_path: 文件路径
-        block_size: 读取块大小
-    
+        block_size: 读取块大小，默认1MB，大块提高I/O效率
+
     Returns:
         str: 文件的MD5哈希值
     """
@@ -68,15 +68,37 @@ def get_file_info(file_path: str, compute_hash: bool = False) -> Optional[dict]:
         return None
 
 
+def is_path_safe(path: str, base_dir: str) -> bool:
+    """
+    检查路径是否安全，防止路径遍历攻击
+
+    Args:
+        path: 要检查的路径
+        base_dir: 基准目录（允许的根目录）
+
+    Returns:
+        bool: 路径是否安全
+    """
+    try:
+        # 解析为绝对路径并规范化
+        abs_path = os.path.abspath(path)
+        abs_base = os.path.abspath(base_dir)
+        # 确保路径在基准目录内
+        return os.path.commonpath([abs_path]) == abs_base
+    except (ValueError, TypeError):
+        # commonpath在不同驱动器时会抛出ValueError
+        return False
+
+
 def copy_file(source_path: str, dest_path: str, overwrite: bool = True) -> bool:
     """
     复制文件，支持覆盖选项
-    
+
     Args:
         source_path: 源文件路径
         dest_path: 目标文件路径
         overwrite: 是否覆盖已存在的文件
-    
+
     Returns:
         bool: 复制是否成功
     """
@@ -85,12 +107,12 @@ def copy_file(source_path: str, dest_path: str, overwrite: bool = True) -> bool:
         if not os.path.exists(source_path):
             logging.error(f"源文件不存在: {source_path}")
             return False
-        
+
         # 检查路径长度（Windows 限制 260 字符）
         if len(dest_path) > 250:
             logging.error(f"目标路径过长 ({len(dest_path)} 字符): {dest_path[:100]}...")
             return False
-        
+
         # 确保目标目录存在
         dest_dir = os.path.dirname(dest_path)
         if dest_dir:
