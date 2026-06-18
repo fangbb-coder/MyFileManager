@@ -510,6 +510,81 @@ class SyncEngine:
             self._log_message(f"双向同步过程中发生错误: {str(e)}", "error")
             return False
     
+    def _scan_by_size(self, root_dir: str, ignore_patterns: Optional[List[str]] = None) -> Dict[int, List[str]]:
+        """
+        按文件大小快速扫描目录，返回 {size: [paths]}。
+        不计算哈希，仅做 os.stat，用于 find_same_files 的第一遍筛选。
+        """
+        result: Dict[int, List[str]] = {}
+        if not os.path.exists(root_dir):
+            return result
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if should_ignore_file(file_path, ignore_patterns):
+                    continue
+                try:
+                    file_size = os.path.getsize(file_path)
+                except OSError:
+                    continue
+                result.setdefault(file_size, []).append(file_path)
+            # 过滤目录
+            dirnames[:] = [d for d in dirnames
+                          if not should_ignore_file(os.path.join(dirpath, d), ignore_patterns)]
+            if self._stop_requested:
+                return {}
+        return result
+
+    def _hash_candidates(self, size_map: Dict[int, List[str]], sizes: Set[int], label: str = "") -> Dict[int, Dict[str, str]]:
+        """
+        对指定大小集合中的文件计算 MD5 哈希，返回 {size: {path: hash}}。
+        跳过 0 字节和未在 sizes 中的文件。
+        """
+        result: Dict[int, Dict[str, str]] = {}
+        if not sizes:
+            return result
+        # 收集所有需要哈希的文件
+        todo: List[str] = []
+        for size in sizes:
+            todo.extend(size_map.get(size, []))
+        total = len(todo)
+        if total == 0:
+            return result
+        # 不再修改 self._total_files，由调用方 find_same_files 一次性设置正确合计
+        done = 0
+        last_reported = 0
+        for path in todo:
+            if self._stop_requested:
+                return result
+            while self._pause_requested and not self._stop_requested:
+                time.sleep(0.5)
+            try:
+                file_hash = get_file_hash(path)
+            except Exception as e:
+                self._log_message(f"计算哈希失败 {path}: {str(e)}", "warning")
+                file_hash = None
+            if file_hash is None:
+                done += 1
+                self._processed_files += 1
+                continue
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                done += 1
+                self._processed_files += 1
+                continue
+            result.setdefault(size, {})[path] = file_hash
+            done += 1
+            self._processed_files += 1
+            self._current_file = path
+            # 节流日志：每处理 10% 报告一次
+            if done - last_reported >= max(1, total // 10) or done == total:
+                last_reported = done
+                pct = (done / total) * 100
+                tag = f"[{label}] " if label else ""
+                self._log_message(f"{tag}哈希进度: {pct:.0f}% ({done}/{total})")
+        return result
+
     def find_same_files(self, dir_a: str, dir_b: str, ignore_patterns: Optional[List[str]] = None, show_duplicates: bool = False) -> List[Tuple[str, str]]:
         """
         查找两个目录中的相同文件
@@ -528,6 +603,7 @@ class SyncEngine:
             self._pause_requested = False
             self._current_progress = 0
             self._processed_files = 0
+            self._total_files = 0  # 重置以避免上一次任务的脏值
             self._sync_log = []
             
             self._log_message(f"========== 开始查找相同文件 ==========")
@@ -540,131 +616,103 @@ class SyncEngine:
                 ignore_patterns = parse_ignore_patterns(ignore_patterns)
                 self._log_message(f"已解析忽略模式: {ignore_patterns}")
             
-            # 扫描两个目录
-            self._log_message(f"[步骤1/3] 正在扫描目录A - {dir_a}")
+            # 两遍式扫描：先按大小分组，再仅对大小匹配的文件计算哈希。
+            # 这样可避免对不可能匹配的唯一大小文件进行昂贵的 MD5 计算。
+            self._log_message(f"[步骤1/4] 正在扫描目录A - {dir_a}")
             if not self._check_pause_stop():
                 self._log_message("操作已暂停或停止")
                 return []
-            
-            files_a = self._scan_files(dir_a, ignore_patterns, compute_hash=True)
+            size_map_a = self._scan_by_size(dir_a, ignore_patterns)
             if self._stop_requested:
-                self._log_message("操作已停止")
                 return []
-            
-            self._log_message(f"目录A扫描完成！共发现 {len(files_a)} 个文件")
-            
-            self._log_message(f"[步骤1/3] 正在扫描目录B - {dir_b}")
+            self._log_message(f"目录A扫描完成：{sum(len(v) for v in size_map_a.values())} 个文件，{len(size_map_a)} 个唯一大小")
+
+            self._log_message(f"[步骤1/4] 正在扫描目录B - {dir_b}")
             if not self._check_pause_stop():
                 self._log_message("操作已暂停或停止")
                 return []
-            
-            files_b = self._scan_files(dir_b, ignore_patterns, compute_hash=True)
+            size_map_b = self._scan_by_size(dir_b, ignore_patterns)
             if self._stop_requested:
-                self._log_message("操作已停止")
                 return []
-            
-            self._log_message(f"目录B扫描完成！共发现 {len(files_b)} 个文件")
-            
-            # 计算总文件数
-            self._total_files = len(files_a) + len(files_b)
-            self._log_message(f"总计文件数: {self._total_files} (目录A: {len(files_a)}, 目录B: {len(files_b)})")
-            
-            # 查找相同文件
-            self._log_message(f"[步骤2/3] 开始构建文件映射，准备比对...")
-            
-            # 按文件大小和哈希分组（不包含文件名，以识别不同文件名的相同内容文件）
+            self._log_message(f"目录B扫描完成：{sum(len(v) for v in size_map_b.values())} 个文件，{len(size_map_b)} 个唯一大小")
+
+            # 仅保留两侧都出现过的候选大小
+            common_sizes = set(size_map_a.keys()) & set(size_map_b.keys())
+            # 空文件不需要哈希比较
+            common_sizes.discard(0)
+            if not common_sizes:
+                self._log_message("未找到大小相同且非空的候选文件")
+                self._total_files = 0
+                self._notify_progress()
+                return []
+
+            self._log_message(f"[步骤2/4] 大小候选集：{len(common_sizes)} 个共同大小，"
+                              f"需哈希文件 {sum(len(size_map_a[s]) + len(size_map_b[s]) for s in common_sizes)} 个")
+
+            self._total_files = sum(len(size_map_a[s]) + len(size_map_b[s]) for s in common_sizes)
+            self._processed_files = 0  # 重置，让 _hash_candidates 从 0 开始计数
+            self._notify_progress()  # 先推送一次基线，再开始哈希
+            # 第二遍：仅对候选文件计算哈希
+            hash_map_a = self._hash_candidates(size_map_a, common_sizes, label="A")
+            if self._stop_requested:
+                return []
+            hash_map_b = self._hash_candidates(size_map_b, common_sizes, label="B")
+            if self._stop_requested:
+                return []
+
+            self._log_message(f"[步骤3/4] 哈希映射完成：A {len(hash_map_a)} 组，B {len(hash_map_b)} 组")
+
+            # 构建 (size, hash) -> [paths] 的最终映射
             file_map_a = {}
+            for size in common_sizes:
+                for path, h in hash_map_a.get(size, {}).items():
+                    file_map_a.setdefault((size, h), []).append(path)
             file_map_b = {}
-            
-            # 构建文件A的映射
-            self._log_message(f"[步骤2/3] 正在构建目录A文件映射... (共{len(files_a)}个文件)")
-            a_count = 0
-            for rel_path, info in files_a.items():
-                if not self._check_pause_stop():
-                    self._log_message("操作已暂停或停止")
-                    return []
-                
-                # 使用文件大小和哈希作为key，识别相同内容但不同文件名的文件
-                key = (info['size'], info['hash'])
-                if key not in file_map_a:
-                    file_map_a[key] = []
-                file_map_a[key].append(info['path'])
-                
-                a_count += 1
-                self._processed_files += 1
-                
-                # 实时更新进度，增加更新频率
-                if a_count % 50 == 0:  # 每50个文件更新一次进度
-                    progress = (a_count / len(files_a)) * 100
-                    self._log_message(f"[目录A] 构建进度: {progress:.1f}% ({a_count}/{len(files_a)} 文件)")
-            
-            self._log_message(f"[步骤2/3] 目录A文件映射构建完成！共 {len(file_map_a)} 个唯一文件组")
-            
-            # 构建文件B的映射
-            self._log_message(f"[步骤2/3] 正在构建目录B文件映射... (共{len(files_b)}个文件)")
-            b_count = 0
-            for rel_path, info in files_b.items():
-                if not self._check_pause_stop():
-                    self._log_message("操作已暂停或停止")
-                    return []
-                
-                # 使用文件大小和哈希作为key，识别相同内容但不同文件名的文件
-                key = (info['size'], info['hash'])
-                if key not in file_map_b:
-                    file_map_b[key] = []
-                file_map_b[key].append(info['path'])
-                
-                b_count += 1
-                self._processed_files += 1
-                
-                # 实时更新进度，增加更新频率
-                if b_count % 50 == 0:  # 每50个文件更新一次进度
-                    progress = (b_count / len(files_b)) * 100
-                    self._log_message(f"[目录B] 构建进度: {progress:.1f}% ({b_count}/{len(files_b)} 文件)")
-            
-            self._log_message(f"[步骤2/3] 目录B文件映射构建完成！共 {len(file_map_b)} 个唯一文件组")
-            
+            for size in common_sizes:
+                for path, h in hash_map_b.get(size, {}).items():
+                    file_map_b.setdefault((size, h), []).append(path)
+
             same_files = []
             found_count = 0
             
             # 查找相同文件
-            self._log_message(f"[步骤3/3] 开始比对文件... (目录A: {len(file_map_a)}组, 目录B: {len(file_map_b)}组)")
+            self._log_message(f"[步骤4/4] 开始比对文件... (目录A: {len(file_map_a)}组, 目录B: {len(file_map_b)}组)")
             total_keys = len(file_map_a)
             processed_keys = 0
-            
+
             for key in file_map_a:
                 if not self._check_pause_stop():
                     self._log_message("操作已暂停或停止")
                     return []
-                
+
                 processed_keys += 1
-                
+
                 if key in file_map_b:
                     file_size = key[0]
                     file_hash = key[1]
-                    
+
                     # 记录找到匹配的文件组
                     self._log_message(f"[匹配] 找到相同文件组: 大小={file_size}字节, 哈希={file_hash[:8]}...")
-                    
+
                     for path_a in file_map_a[key]:
                         for path_b in file_map_b[key]:
                             found_count += 1
                             same_files.append((path_a, path_b))
-                            
+
                             # 实时记录发现的相同文件
                             self._log_message(f"  → 发现相同文件 #{found_count}: {os.path.basename(path_a)} ({file_size}字节)")
                             self._log_message(f"    A: {path_a}")
                             self._log_message(f"    B: {path_b}")
-                
-                # 更新进度，增加更新频率
-                if processed_keys % 5 == 0 or processed_keys == total_keys:  # 每5个key或最后更新一次进度
+
+                # 进度更新：每 5 个 key 或最后一次
+                if processed_keys % 5 == 0 or processed_keys == total_keys:
                     progress = (processed_keys / total_keys) * 100
-                    self._log_message(f"[步骤3/3] 比对进度: {progress:.1f}% ({processed_keys}/{total_keys} 组)，已发现 {found_count} 对相同文件")
+                    self._log_message(f"[步骤4/4] 比对进度: {progress:.1f}% ({processed_keys}/{total_keys} 组)，已发现 {found_count} 对相同文件")
             
             # 过滤重复项（如果需要）
             final_files = same_files
             if not show_duplicates and same_files:
-                self._log_message(f"[步骤3/3] 正在过滤重复项... 原始相同文件数: {len(same_files)}")
+                self._log_message(f"[步骤4/4] 正在过滤重复项... 原始相同文件数: {len(same_files)}")
                 filtered_files = []
                 seen_pairs = set()
                 
@@ -685,7 +733,7 @@ class SyncEngine:
                     self._log_message(f"  [过滤] ... 还有 {filter_count - 10} 个重复项被过滤")
                     
                 final_files = filtered_files
-                self._log_message(f"[步骤3/3] 重复项过滤完成！最终相同文件数: {len(final_files)} (过滤了 {filter_count} 个重复项)")
+                self._log_message(f"[步骤4/4] 重复项过滤完成！最终相同文件数: {len(final_files)} (过滤了 {filter_count} 个重复项)")
                 
                 # 最终结果日志
                 self._log_message(f"[完成] 相同文件查找完成，过滤后共发现 {len(final_files)} 对相同文件")

@@ -193,7 +193,10 @@ class DuplicateFinderThread(BaseThread):
 
     THREADS = 4
     HASH_ALGO = "md5"
-    CHUNK_SIZE = 8192
+    # 使用 1MB 块大小，与 utils.get_file_hash 默认值一致，大文件哈希更快
+    CHUNK_SIZE = 1048576
+    # 节流：每处理这么多文件才发一次 current_file_updated 信号
+    CURRENT_FILE_THROTTLE = 200
 
     progress_updated = ConditionalSignal(int)
     log_updated = ConditionalSignal(str)
@@ -230,10 +233,18 @@ class DuplicateFinderThread(BaseThread):
     def _emit_current_file(self, file_path: str) -> None:
         self.current_file_updated.emit(file_path)
 
+    def _maybe_emit_current_file(self, file_path: str, processed: int, total: int) -> None:
+        """按比例节流 current_file_updated 信号，避免在大量文件时压垮 UI"""
+        if total <= 0:
+            return
+        step = max(1, total // self.CURRENT_FILE_THROTTLE)
+        if processed % step == 0 or processed == total:
+            self._emit_current_file(file_path)
+
     def _emit_results(self, duplicate_groups: List[Dict[str, Any]]) -> None:
         self.duplicate_files_found.emit(duplicate_groups)
 
-    def _file_hash(self, path: str, algo: str = "md5", chunk_size: int = 8192) -> Optional[str]:
+    def _file_hash(self, path: str, algo: str = "md5", chunk_size: int = 1048576) -> Optional[str]:
         """计算文件哈希值"""
         h = getattr(hashlib, algo)()
         try:
@@ -301,7 +312,7 @@ class DuplicateFinderThread(BaseThread):
                         self._processed_files += 1
                         progress = int((self._processed_files / self._total_files) * 50)
                         self._emit_progress(progress)
-                        self._emit_current_file(file_path)
+                        self._maybe_emit_current_file(file_path, self._processed_files, self._total_files)
 
                     except Exception as e:
                         self._emit_log(f"处理文件 {file_path} 时出错: {str(e)}")
@@ -352,7 +363,7 @@ class DuplicateFinderThread(BaseThread):
                         finally:
                             self._hash_processed_files += 1
                             self._update_hash_progress()
-                            self._emit_current_file(file_path)
+                            self._maybe_emit_current_file(file_path, self._hash_processed_files, self._hash_total_files)
 
             duplicate_groups = []
             for file_hash, files in hash_groups.items():
@@ -472,7 +483,7 @@ class CopyFilesThread(BaseThread):
                                     def get_file_md5(filepath: str) -> str:
                                         hash_md5 = hashlib.md5()
                                         with open(filepath, "rb") as f:
-                                            for chunk in iter(lambda: f.read(4096), b""):
+                                            for chunk in iter(lambda: f.read(1048576), b""):
                                                 hash_md5.update(chunk)
                                         return hash_md5.hexdigest()
 

@@ -83,8 +83,9 @@ def is_path_safe(path: str, base_dir: str) -> bool:
         # 解析为绝对路径并规范化
         abs_path = os.path.abspath(path)
         abs_base = os.path.abspath(base_dir)
-        # 确保路径在基准目录内
-        return os.path.commonpath([abs_path]) == abs_base
+        # 确保路径在基准目录内（同时传入 abs_path 和 abs_base 才有效）
+        common = os.path.commonpath([abs_path, abs_base])
+        return common == abs_base
     except (ValueError, TypeError):
         # commonpath在不同驱动器时会抛出ValueError
         return False
