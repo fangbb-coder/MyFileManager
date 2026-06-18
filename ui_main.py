@@ -2405,7 +2405,16 @@ class SyncApp(BaseObject):
         tk_slimming_folder_frame.pack(fill=tk.X, pady=5)
         ttk.Label(tk_slimming_folder_frame, text="目标文件夹:").pack(side=tk.LEFT, padx=5)
         self.tk_file_slimming_folder_var = tk.StringVar()
-        ttk.Entry(tk_slimming_folder_frame, textvariable=self.tk_file_slimming_folder_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.tk_file_slimming_folder_entry = ttk.Entry(tk_slimming_folder_frame, textvariable=self.tk_file_slimming_folder_var, width=40)
+        self.tk_file_slimming_folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.tk_file_slimming_folder_entry.bind('<Return>', lambda e: self._tk_start_file_slimming())
+        self.tk_file_slimming_folder_entry.bind('<KeyRelease>', lambda e: self.tk_start_file_slimming_btn.config(state=tk.NORMAL if self.tk_file_slimming_folder_var.get().strip() else tk.DISABLED))
+        tk_slimming_drives = self._get_available_drives()
+        if tk_slimming_drives:
+            self.tk_file_slimming_drive_var = tk.StringVar()
+            drive_combo = ttk.Combobox(tk_slimming_folder_frame, textvariable=self.tk_file_slimming_drive_var, values=tk_slimming_drives, width=5, state='readonly')
+            drive_combo.pack(side=tk.LEFT, padx=2)
+            drive_combo.bind('<<ComboboxSelected>>', lambda e: (self.tk_file_slimming_folder_var.set(self.tk_file_slimming_drive_var.get()), self.tk_start_file_slimming_btn.config(state=tk.NORMAL)))
         ttk.Button(tk_slimming_folder_frame, text="浏览...", command=self._tk_browse_file_slimming_folder).pack(side=tk.LEFT, padx=5)
         
         tk_slimming_scan_frame = ttk.Frame(self.file_slimming_frame)
@@ -2457,7 +2466,16 @@ class SyncApp(BaseObject):
         tk_fsize_folder_frame.pack(fill=tk.X, pady=5)
         ttk.Label(tk_fsize_folder_frame, text="目标文件夹:").pack(side=tk.LEFT, padx=5)
         self.tk_folder_size_folder_var = tk.StringVar()
-        ttk.Entry(tk_fsize_folder_frame, textvariable=self.tk_folder_size_folder_var, width=50).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.tk_folder_size_folder_entry = ttk.Entry(tk_fsize_folder_frame, textvariable=self.tk_folder_size_folder_var, width=40)
+        self.tk_folder_size_folder_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.tk_folder_size_folder_entry.bind('<Return>', lambda e: self._tk_start_folder_size())
+        self.tk_folder_size_folder_entry.bind('<KeyRelease>', lambda e: self.tk_start_folder_size_btn.config(state=tk.NORMAL if self.tk_folder_size_folder_var.get().strip() else tk.DISABLED))
+        tk_fsize_drives = self._get_available_drives()
+        if tk_fsize_drives:
+            self.tk_folder_size_drive_var = tk.StringVar()
+            drive_combo = ttk.Combobox(tk_fsize_folder_frame, textvariable=self.tk_folder_size_drive_var, values=tk_fsize_drives, width=5, state='readonly')
+            drive_combo.pack(side=tk.LEFT, padx=2)
+            drive_combo.bind('<<ComboboxSelected>>', lambda e: (self.tk_folder_size_folder_var.set(self.tk_folder_size_drive_var.get()), self.tk_start_folder_size_btn.config(state=tk.NORMAL)))
         ttk.Button(tk_fsize_folder_frame, text="浏览...", command=self._tk_browse_folder_size_folder).pack(side=tk.LEFT, padx=5)
         
         tk_fsize_scan_frame = ttk.Frame(self.folder_size_frame)
@@ -2824,6 +2842,16 @@ class SyncApp(BaseObject):
     
     # ===== Tkinter版文件夹搜身方法 =====
     
+    def _get_available_drives(self):
+        drives = []
+        if sys.platform == 'win32':
+            import string
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drives.append(drive)
+        return drives
+
     def _tk_browse_file_slimming_folder(self):
         folder = filedialog.askdirectory()
         if folder:
